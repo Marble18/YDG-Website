@@ -7,6 +7,10 @@
   var currentUser = null;
   var adminPage = 'dashboard';
   var toastTimer = null;
+  var customerCategory = 'All';
+  var THEME_STORAGE = 'yt-theme-v2';
+
+  applyTheme(localStorage.getItem(THEME_STORAGE) || 'light');
 
   function seedState() {
     return {
@@ -110,6 +114,11 @@
     return state.products.find(function (product) { return product.id === Number(id); });
   }
 
+  function applyTheme(theme) {
+    document.body.classList.toggle('dark-mode', theme === 'dark');
+    localStorage.setItem(THEME_STORAGE, theme);
+  }
+
   function itemPrice(item) {
     var product = getProduct(item.productId);
     return Number(item.unitPrice || (product ? product.price : 0));
@@ -164,11 +173,12 @@
   }
 
   function topbar(hasCart) {
-    return '<header class="topbar"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><div class="top-actions">' + (hasCart ? '<button class="cart-button" id="open-cart">Cart <span class="cart-count">' + cartCount() + '</span></button>' : '') + '<div class="user-label"><b>' + esc(currentUser.name) + '</b><span>' + (currentUser.role === 'owner' ? 'Owner account' : 'Customer account') + '</span></div><button class="logout" id="logout">Log out</button></div></header>';
+    var customerMenu = currentUser.role === 'customer' ? '<button class="customer-menu-trigger" id="open-customer-menu" aria-label="Open customer menu"><span class="customer-menu-name">' + esc(currentUser.name) + '</span><span class="hamburger"><i></i><i></i><i></i></span></button>' : '<div class="user-label"><b>' + esc(currentUser.name) + '</b><span>Owner account</span></div><button class="logout" id="logout">Log out</button>';
+    return '<header class="topbar"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><div class="top-actions">' + (hasCart ? '<button class="cart-button" id="open-cart">Cart <span class="cart-count">' + cartCount() + '</span></button>' : '') + customerMenu + '</div></header>';
   }
 
   function renderLogin() {
-    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Customer ordering portal</p><h2>Welcome back</h2><p class="subtext">' + (state.settings.maintenanceMode ? 'Customer ordering is under maintenance. Owner accounts can still sign in to manage the site.' : 'Sign in with the account supplied by Yadanar Theingi.') + '</p><label class="field">Username<input name="username" required autocomplete="username"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><div class="demo-credentials"><b>Demo access</b><br>Owner: <b>owner / Owner123</b><br>Customer: <b>mya / Mya123</b></div></form></div></section>';
+    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Customer ordering portal</p><h2>Welcome back</h2><p class="subtext">' + (state.settings.maintenanceMode ? 'Customer ordering is under maintenance. Owner accounts can still sign in to manage the site.' : 'Sign in with the account supplied by Yadanar Theingi.') + '</p><label class="field">Username<input name="username" required autocomplete="username"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><div class="login-order-note"><b>Note</b><br>Order တင်လိုပါက Viber Number 09780000146 သို အရင် ဆက်သွယ်ပေးပါ။</div><div class="demo-credentials"><b>Demo access</b><br>Owner: <b>owner / Owner123</b><br>Customer: <b>mya / Mya123</b></div></form></div></section>';
     document.getElementById('login-form').addEventListener('submit', function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
@@ -181,24 +191,79 @@
   }
 
   function renderCustomer() {
-    document.getElementById('app').innerHTML = topbar(true) + '<main class="customer-main"><section class="customer-hero"><div><p class="eyebrow">Hello, ' + esc(currentUser.name) + '</p><h1>Order your favourites</h1><p>Choose items, submit your order, and follow the confirmed quantities and shipping status here.</p></div><input class="search" id="product-search" placeholder="Search products..."></section><section><div class="section-title"><h2>Our collection</h2><span id="product-count"></span></div><div class="product-grid" id="product-grid"></div></section><section><div class="section-title"><h2>My recent orders</h2><span>Ready-to-ship vouchers can be printed</span></div><div class="panel table-wrap" id="customer-orders"></div></section></main><div id="modal-root"></div>';
-    document.getElementById('logout').addEventListener('click', logout);
+    document.getElementById('app').innerHTML = topbar(true) + '<main class="customer-main"><section class="customer-hero"><div><p class="eyebrow">Hello, ' + esc(currentUser.name) + '</p><h1>Order your favourites</h1><p>Choose items, submit your order, and follow the confirmed quantities and shipping status from your customer menu.</p></div><input class="search" id="product-search" placeholder="Search products..."></section><section><div class="section-title"><h2>Our collection</h2><span id="product-count"></span></div><div class="category-filters" id="category-filters"></div><div class="product-grid" id="product-grid"></div></section></main><div id="customer-menu-root"></div><div id="modal-root"></div>';
     document.getElementById('open-cart').addEventListener('click', renderCart);
     document.getElementById('product-search').addEventListener('input', function (event) { renderProducts(event.target.value); });
+    document.getElementById('open-customer-menu').addEventListener('click', renderCustomerMenu);
+    renderCategoryFilters();
     renderProducts('');
-    renderCustomerOrders();
+  }
+
+  function renderCategoryFilters() {
+    var categories = state.products.filter(function (product) { return !product.deleted; }).map(function (product) { return product.category; }).filter(function (category, index, list) { return list.indexOf(category) === index; }).sort();
+    if (categories.indexOf(customerCategory) === -1 && customerCategory !== 'All') customerCategory = 'All';
+    document.getElementById('category-filters').innerHTML = ['All'].concat(categories).map(function (category) {
+      return '<button class="category-filter ' + (customerCategory === category ? 'active' : '') + '" data-category="' + esc(category) + '">' + esc(category) + '</button>';
+    }).join('');
+    document.querySelectorAll('[data-category]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        customerCategory = button.dataset.category;
+        renderCategoryFilters();
+        renderProducts(document.getElementById('product-search').value);
+      });
+    });
   }
 
   function renderProducts(query) {
     var search = String(query || '').toLowerCase();
-    var products = state.products.filter(function (product) { return !product.deleted && (product.name.toLowerCase().indexOf(search) > -1 || product.category.toLowerCase().indexOf(search) > -1); });
+    var products = state.products.filter(function (product) { return !product.deleted && (customerCategory === 'All' || product.category === customerCategory) && (product.name.toLowerCase().indexOf(search) > -1 || product.category.toLowerCase().indexOf(search) > -1); });
     document.getElementById('product-count').textContent = products.length + ' items available';
     document.getElementById('product-grid').innerHTML = products.length ? products.map(function (product) {
-      return '<article class="product-card"><div class="product-photo" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</div><div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + '</span><span>' + (product.stock ? product.stock + ' in stock' : 'Out of stock') + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="1" max="' + product.stock + '" value="1" ' + (product.stock ? '' : 'disabled') + '><button class="primary add-to-cart" data-product="' + product.id + '" ' + (product.stock ? '' : 'disabled') + '>Add</button></div></div></article>';
+      var hasPhoto = String(product.photo || '').indexOf('data:image/') === 0;
+      var photo = hasPhoto ? '<button class="product-photo photo-preview-button" data-preview-photo="' + product.id + '" aria-label="Preview ' + esc(product.name) + '" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</button>' : '<div class="product-photo" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</div>';
+      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + '</span><span>' + (product.stock ? product.stock + ' in stock' : 'Out of stock') + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="1" max="' + product.stock + '" value="1" ' + (product.stock ? '' : 'disabled') + '><button class="primary add-to-cart" data-product="' + product.id + '" ' + (product.stock ? '' : 'disabled') + '>Add</button></div></div></article>';
     }).join('') : '<div class="empty">No matching products found.</div>';
     document.querySelectorAll('[data-product]').forEach(function (button) {
       button.addEventListener('click', function () { addToCart(Number(button.dataset.product), Number(document.getElementById('qty-' + button.dataset.product).value || 1)); });
     });
+    document.querySelectorAll('[data-preview-photo]').forEach(function (button) {
+      button.addEventListener('click', function () { renderPhotoPreview(Number(button.dataset.previewPhoto)); });
+    });
+  }
+
+  function renderPhotoPreview(productId) {
+    var product = getProduct(productId);
+    if (!product || String(product.photo || '').indexOf('data:image/') !== 0) return;
+    modal('<div class="modal-head"><div><p class="eyebrow">Product photo</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><div class="photo-lightbox"><img src="' + esc(product.photo) + '" alt="' + esc(product.name) + '"></div>');
+  }
+
+  function renderCustomerMenu() {
+    var dark = document.body.classList.contains('dark-mode');
+    document.getElementById('customer-menu-root').innerHTML = '<div class="customer-menu-backdrop" id="close-customer-menu"></div><aside class="customer-menu-panel"><div class="customer-menu-head"><div><p class="eyebrow">Customer menu</p><h2>' + esc(currentUser.name) + '</h2></div><button class="icon-btn" id="close-customer-menu-button">×</button></div><button class="customer-menu-item" id="open-recent-orders"><span>Recent orders</span><small>Search order ID & view voucher</small></button><label class="theme-switch-row"><span><b>Dark mode</b><small>Change the display theme</small></span><input id="customer-theme-switch" type="checkbox" ' + (dark ? 'checked' : '') + '><span class="theme-switch"></span></label><button class="customer-menu-item danger" id="customer-menu-logout"><span>Log out</span><small>Sign out of this customer account</small></button></aside>';
+    document.getElementById('close-customer-menu').addEventListener('click', closeCustomerMenu);
+    document.getElementById('close-customer-menu-button').addEventListener('click', closeCustomerMenu);
+    document.getElementById('open-recent-orders').addEventListener('click', function () { closeCustomerMenu(); renderRecentOrders(); });
+    document.getElementById('customer-theme-switch').addEventListener('change', function (event) { applyTheme(event.target.checked ? 'dark' : 'light'); });
+    document.getElementById('customer-menu-logout').addEventListener('click', logout);
+  }
+
+  function closeCustomerMenu() {
+    var root = document.getElementById('customer-menu-root');
+    if (root) root.innerHTML = '';
+  }
+
+  function renderRecentOrders() {
+    modal('<div class="modal-head"><div><p class="eyebrow">Customer account</p><h2>Recent orders</h2></div><button class="icon-btn" id="close-modal">×</button></div><p class="subtext">Search using your Order ID, for example YT-1008.</p><input class="search order-search" id="recent-order-search" placeholder="Search Order ID..."><div class="table-wrap" id="recent-order-results"></div>');
+    document.getElementById('recent-order-search').addEventListener('input', function (event) { renderRecentOrderResults(event.target.value); });
+    renderRecentOrderResults('');
+  }
+
+  function renderRecentOrderResults(query) {
+    var search = String(query || '').toLowerCase().replace('#', '');
+    var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id && ('yt-' + order.id).indexOf(search) > -1; }).sort(function (a, b) { return b.id - a.id; });
+    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Total</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + money(order.total) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
+    document.querySelectorAll('[data-menu-order-details]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(Number(button.dataset.menuOrderDetails)); }); });
+    document.querySelectorAll('[data-menu-order-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.menuOrderVoucher)); }); });
   }
 
   function addToCart(productId, quantity) {
