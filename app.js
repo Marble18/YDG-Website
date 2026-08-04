@@ -124,6 +124,10 @@
     return Number(item.unitPrice || (product ? product.price : 0));
   }
 
+  function lineTotal(item) {
+    return item.confirmedPrice !== undefined && item.confirmedPrice !== null ? Number(item.confirmedPrice) : itemPrice(item) * item.quantity;
+  }
+
   function photoMarkup(product, className) {
     var photo = String(product.photo || '');
     var classes = className ? ' class="' + className + '"' : '';
@@ -261,7 +265,7 @@
   function renderRecentOrderResults(query) {
     var search = String(query || '').toLowerCase().replace('#', '');
     var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id && ('yt-' + order.id).indexOf(search) > -1; }).sort(function (a, b) { return b.id - a.id; });
-    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Total</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + money(order.total) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
+    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
     document.querySelectorAll('[data-menu-order-details]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(Number(button.dataset.menuOrderDetails)); }); });
     document.querySelectorAll('[data-menu-order-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.menuOrderVoucher)); }); });
   }
@@ -284,8 +288,7 @@
 
   function renderCart() {
     var items = cartLines();
-    var total = items.reduce(function (sum, line) { return sum + line.product.price * line.quantity; }, 0);
-    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' each</span></div><input type="number" min="1" max="' + line.product.stock + '" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><b>' + money(line.product.price * line.quantity) + '</b><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><div class="cart-total"><span>Total</span><b>' + money(total) + '</b></div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
+    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' each</span></div><input type="number" min="1" max="' + line.product.stock + '" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
     document.querySelectorAll('[data-cart-quantity]').forEach(function (input) {
       input.addEventListener('change', function () {
         var items = cart();
@@ -343,7 +346,7 @@
 
   function renderCustomerOrders() {
     var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id; }).sort(function (a, b) { return b.id - a.id; });
-    document.getElementById('customer-orders').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Total</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + orderCount(order) + '</td><td>' + money(order.total) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-view-order="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-customer-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">You have not placed an order yet.</div>';
+    document.getElementById('customer-orders').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + orderCount(order) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-view-order="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-customer-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">You have not placed an order yet.</div>';
     document.querySelectorAll('[data-view-order]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(Number(button.dataset.viewOrder)); }); });
     document.querySelectorAll('[data-customer-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.customerVoucher)); }); });
   }
@@ -351,11 +354,12 @@
   function renderOrderDetails(orderId) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order || (currentUser.role !== 'owner' && order.customerId !== currentUser.id)) return;
+    var isCustomer = currentUser.role === 'customer';
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
-      return product ? '<tr><td>' + esc(product.name) + '</td><td>' + item.quantity + '</td><td>' + money(itemPrice(item) * item.quantity) + '</td></tr>' : '';
+      return product ? '<tr><td>' + esc(product.name) + '</td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td></tr>' : '';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>#YT-' + order.id + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (order.adjusted ? '<div class="order-alert">The shop updated the available quantity. The total below reflects the confirmed quantities.</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Confirmed qty</th><th>Total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>' + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
+    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>#YT-' + order.id + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (order.adjusted ? '<div class="order-alert">The shop updated the available quantity. ' + (isCustomer ? 'Your confirmed quantities are shown below.' : 'The total below reflects the confirmed quantities.') + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Confirmed qty</th><th>' + (isCustomer ? 'Price' : 'Total') + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + (isCustomer ? '' : '<div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>') + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
     var viewVoucher = document.getElementById('view-voucher');
     if (viewVoucher) viewVoucher.addEventListener('click', function () { renderVoucher(order.id); });
   }
@@ -388,7 +392,7 @@
   }
 
   function ordersPage() {
-    return '<div class="page-heading"><div><p class="eyebrow">Order management</p><h1>Orders</h1><p>Adjust confirmed quantities, move orders through delivery, and upload proof of delivery.</p></div></div><div class="panel table-wrap">' + adminOrderTable(state.orders.slice().sort(function (a, b) { return b.id - a.id; }), true) + '</div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Order management</p><h1>Orders</h1><p>Adjust confirmed quantities, move orders through delivery, and upload proof of delivery.</p></div></div><div class="panel owner-search-panel"><input class="search" id="owner-order-search" placeholder="Search Order ID or customer name..."></div><div class="panel table-wrap" id="owner-order-results">' + adminOrderTable(state.orders.slice().sort(function (a, b) { return b.id - a.id; }), true) + '</div>';
   }
 
   function adminOrderTable(orders, editable) {
@@ -396,8 +400,23 @@
     var statuses = ['Pending', 'Approved', 'Processing', 'Ready to Ship', 'Delivered'];
     return '<table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th>' + (editable ? '<th>Action</th>' : '') + '</tr></thead><tbody>' + orders.map(function (order) {
       var control = editable ? '<select class="status-select" data-status="' + order.id + '">' + statuses.map(function (status) { return '<option value="' + status + '" ' + (order.status === status ? 'selected' : '') + '>' + status + '</option>'; }).join('') + '</select>' : badge(order.status);
-      return '<tr><td><span class="order-id">#YT-' + order.id + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(order.total) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-adjust-order="' + order.id + '">Adjust qty</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
+      return '<tr><td><span class="order-id">#YT-' + order.id + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(order.total) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
     }).join('') + '</tbody></table>';
+  }
+
+  function matchingOwnerOrders(query) {
+    var term = String(query || '').trim().toLowerCase();
+    var idTerm = term.replace(/\D/g, '');
+    return state.orders.slice().sort(function (a, b) { return b.id - a.id; }).filter(function (order) {
+      return !term || String(order.customer || '').toLowerCase().indexOf(term) !== -1 || (idTerm && String(order.id).indexOf(idTerm) !== -1) || ('yt-' + order.id).indexOf(term.replace('#', '')) !== -1;
+    });
+  }
+
+  function bindOrderTableActions(scope) {
+    var root = scope || document;
+    root.querySelectorAll('[data-status]').forEach(function (select) { select.addEventListener('change', function () { updateStatus(Number(select.dataset.status), select.value); }); });
+    root.querySelectorAll('[data-owner-order-view]').forEach(function (button) { button.addEventListener('click', function () { renderOwnerOrderModal(Number(button.dataset.ownerOrderView), 'view'); }); });
+    root.querySelectorAll('[data-owner-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.ownerVoucher)); }); });
   }
 
   function productsPage() {
@@ -432,9 +451,7 @@
 
   function bindAdmin() {
     document.querySelectorAll('[data-go]').forEach(function (button) { button.addEventListener('click', function () { adminPage = button.dataset.go; renderAdminPage(); }); });
-    document.querySelectorAll('[data-status]').forEach(function (select) { select.addEventListener('change', function () { updateStatus(Number(select.dataset.status), select.value); }); });
-    document.querySelectorAll('[data-adjust-order]').forEach(function (button) { button.addEventListener('click', function () { renderAdjustOrder(Number(button.dataset.adjustOrder)); }); });
-    document.querySelectorAll('[data-owner-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.ownerVoucher)); }); });
+    bindOrderTableActions(document);
     document.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(Number(button.dataset.editProduct)); }); });
     document.querySelectorAll('[data-manual-stock]').forEach(function (button) { button.addEventListener('click', function () { renderManualStockAdjust(Number(button.dataset.manualStock)); }); });
     document.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(Number(button.dataset.deleteProduct)); }); });
@@ -448,6 +465,12 @@
     var voucherSettings = document.getElementById('voucher-settings'); if (voucherSettings) voucherSettings.addEventListener('submit', saveVoucherSettings);
     var download = document.getElementById('download-backup'); if (download) download.addEventListener('click', downloadBackup);
     var restore = document.getElementById('restore-backup'); if (restore) restore.addEventListener('change', restoreBackup);
+    var ownerOrderSearch = document.getElementById('owner-order-search');
+    if (ownerOrderSearch) ownerOrderSearch.addEventListener('input', function () {
+      var results = document.getElementById('owner-order-results');
+      results.innerHTML = adminOrderTable(matchingOwnerOrders(ownerOrderSearch.value), true);
+      bindOrderTableActions(results);
+    });
     ['voucher-title', 'voucher-color', 'voucher-footer'].forEach(function (id) { var input = document.getElementById(id); if (input) input.addEventListener('input', renderLiveVoucherPreview); });
   }
 
@@ -457,6 +480,92 @@
     if (status === 'Delivered' && !order.proofOfDelivery) return renderProofForm(orderId);
     order.status = status;
     saveState(); renderAdminPage(); toast('Order #YT-' + orderId + ' updated to ' + status + '.');
+  }
+
+  function renderOwnerOrderModal(orderId, activeTab) {
+    var order = state.orders.find(function (entry) { return entry.id === orderId; });
+    if (!order) return;
+    var showChecklist = activeTab === 'checklist';
+    var showAdjust = activeTab === 'adjust';
+    var tabs = '<div class="order-tabs"><button class="order-tab ' + (!showChecklist ? 'active' : '') + '" type="button" data-owner-order-tab="view">View</button><button class="order-tab ' + (showChecklist ? 'active' : '') + '" type="button" data-owner-order-tab="checklist">Check list</button></div>';
+    var details = '<div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div><span>Status</span>' + badge(order.status) + '<small>Order date: ' + order.date + '</small></div></div>';
+    var rows = order.items.map(function (item) {
+      var product = getProduct(item.productId);
+      if (!product) return '';
+      if (!showChecklist) return '<tr><td><b>' + esc(product.name) + '</b></td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td><td><span class="pick-mark ' + (item.picked ? '' : 'pick-pending') + '">' + (item.picked ? 'Picked' : 'Not checked') + '</span></td></tr>';
+      return '<tr><td><b>' + esc(product.name) + '</b><br><small>Unit price: ' + money(itemPrice(item)) + '</small></td><td><input class="qty-input" name="qty-' + product.id + '" data-checklist-qty="' + product.id + '" data-unit-price="' + itemPrice(item) + '" type="number" min="1" max="' + (product.stock + item.quantity) + '" value="' + item.quantity + '"><br><small>Available: ' + (product.stock + item.quantity) + '</small></td><td><input class="qty-input checklist-price-input" name="price-' + product.id + '" data-checklist-price="' + product.id + '" data-manual-price="' + (item.confirmedPrice !== undefined && item.confirmedPrice !== null ? 'true' : '') + '" type="number" min="0" step="1" value="' + lineTotal(item) + '"></td><td><label class="check-item"><input name="picked-' + product.id + '" type="checkbox" ' + (item.picked ? 'checked' : '') + '> Picked</label></td></tr>';
+    }).join('');
+    if (showAdjust) {
+      var adjustRows = order.items.map(function (item) {
+        var product = getProduct(item.productId);
+        if (!product) return '';
+        var quantityControl = item.picked
+          ? '<b>' + item.quantity + '</b><br><small>Picked — locked</small>'
+          : '<input class="qty-input" name="qty-' + product.id + '" type="number" min="1" max="' + (product.stock + item.quantity) + '" value="' + item.quantity + '"><br><small>Available: ' + (product.stock + item.quantity) + '</small>';
+        return '<tr><td><b>' + esc(product.name) + '</b></td><td>' + quantityControl + '</td><td>' + money(itemPrice(item)) + '</td><td>' + money(lineTotal(item)) + '</td></tr>';
+      }).join('');
+      modal('<form id="owner-adjust-form"><div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Adjust quantity</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div>' + tabs + '<p class="subtext">Save the quantity first. After an item is marked Picked in the Check list, its quantity and confirmed price are locked.</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Confirmed qty</th><th>Unit price</th><th>Current price</th></tr></thead><tbody>' + adjustRows + '</tbody></table></div><div class="two-button"><button class="primary" type="submit">Save quantity</button></div></form>');
+      document.querySelectorAll('[data-owner-order-tab]').forEach(function (button) { button.addEventListener('click', function () { renderOwnerOrderModal(order.id, button.dataset.ownerOrderTab); }); });
+      document.getElementById('owner-adjust-form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        var data = new FormData(event.target);
+        var changes = [];
+        for (var index = 0; index < order.items.length; index += 1) {
+          var item = order.items[index];
+          var product = getProduct(item.productId);
+          var quantity = item.picked ? item.quantity : Number(data.get('qty-' + item.productId));
+          if (!item.picked && (!Number.isInteger(quantity) || quantity < 1 || quantity > product.stock + item.quantity)) return toast('Enter a valid available quantity for every unpicked product.');
+          changes.push({ item: item, product: product, quantity: quantity, difference: quantity - item.quantity });
+        }
+        changes.forEach(function (change) {
+          change.product.stock -= change.difference;
+          change.item.quantity = change.quantity;
+          if (change.difference !== 0) state.inventory.unshift({ id: Date.now() + change.product.id, productId: change.product.id, product: change.product.name, type: change.difference > 0 ? 'OUT' : 'IN', quantity: Math.abs(change.difference), date: today(), note: 'Order #YT-' + order.id + ' quantity adjustment' });
+        });
+        order.total = order.items.reduce(function (sum, item) { return sum + itemPrice(item) * item.quantity; }, 0);
+        order.adjusted = order.adjusted || changes.some(function (change) { return change.difference !== 0; });
+        saveState(); renderOwnerOrderModal(order.id, 'view'); toast('Confirmed quantity and price updated.');
+      });
+      return;
+    }
+    var content = !showChecklist
+      ? '<div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Order view</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div>' + tabs + details + (order.adjusted ? '<div class="order-alert">The confirmed quantity was updated. The customer can see the revised item quantities.</div>' : '') + '<div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Total</th><th>Pick list</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>'
+      : '<form id="owner-checklist-form"><div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Check list</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div>' + tabs + '<p class="subtext">Adjust the quantity and tick Picked in the same list. Saving records that item\'s current quantity and price as its confirmed order value.</p>' + details + '<div class="table-wrap"><table><thead><tr><th>Item</th><th>Confirmed qty</th><th>Confirmed price</th><th>Picked</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="two-button"><button class="primary" type="submit">Save check list</button></div></form>';
+    modal(content);
+    document.querySelectorAll('[data-owner-order-tab]').forEach(function (button) { button.addEventListener('click', function () { renderOwnerOrderModal(order.id, button.dataset.ownerOrderTab); }); });
+    var form = document.getElementById('owner-checklist-form');
+    if (!form) return;
+    document.querySelectorAll('[data-checklist-qty]').forEach(function (input) {
+      input.addEventListener('input', function () {
+        var price = document.querySelector('[data-checklist-price="' + input.dataset.checklistQty + '"]');
+        if (price && price.dataset.manualPrice !== 'true') price.value = Number(input.dataset.unitPrice) * (Number(input.value) || 0);
+      });
+    });
+    document.querySelectorAll('[data-checklist-price]').forEach(function (input) { input.addEventListener('input', function () { input.dataset.manualPrice = 'true'; }); });
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var data = new FormData(event.target);
+      var changes = [];
+      for (var index = 0; index < order.items.length; index += 1) {
+        var item = order.items[index];
+        var product = getProduct(item.productId);
+        var quantity = Number(data.get('qty-' + item.productId));
+        var confirmedPrice = Number(data.get('price-' + item.productId));
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > product.stock + item.quantity) return toast('Enter a valid available quantity for every product.');
+        if (!Number.isInteger(confirmedPrice) || confirmedPrice < 0) return toast('Enter a valid confirmed price for every product.');
+        changes.push({ item: item, product: product, quantity: quantity, difference: quantity - item.quantity, price: confirmedPrice, priceChanged: confirmedPrice !== lineTotal(item) });
+      }
+      changes.forEach(function (change) {
+        change.product.stock -= change.difference;
+        change.item.quantity = change.quantity;
+        change.item.confirmedPrice = change.price;
+        change.item.picked = data.get('picked-' + change.product.id) === 'on';
+        if (change.difference !== 0) state.inventory.unshift({ id: Date.now() + change.product.id, productId: change.product.id, product: change.product.name, type: change.difference > 0 ? 'OUT' : 'IN', quantity: Math.abs(change.difference), date: today(), note: 'Order #YT-' + order.id + ' check list quantity adjustment' });
+      });
+      order.total = order.items.reduce(function (sum, item) { return sum + lineTotal(item); }, 0);
+      order.adjusted = order.adjusted || changes.some(function (change) { return change.difference !== 0 || change.priceChanged; });
+      saveState(); renderOwnerOrderModal(order.id, 'view'); toast('Check list quantities, prices and picked items saved.');
+    });
   }
 
   function renderAdjustOrder(orderId) {
@@ -492,7 +601,7 @@
 
   function renderProofForm(orderId) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
-    modal('<form id="proof-form"><div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Proof of delivery</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Upload a delivery photo before marking the order as Delivered.</p><label class="field">Proof photo<input id="proof-photo" type="file" accept="image/*" required></label><p class="photo-help">For this demo, keep the photo below 1.5 MB.</p><div class="photo-upload-preview" id="proof-preview"><div class="photo-placeholder"><span>Proof photo</span><small>Photo will be attached to this order</small></div></div><div class="two-button"><button class="primary" type="submit">Save proof & mark Delivered</button></div></form>');
+    modal('<form id="proof-form"><div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Proof of delivery</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">A delivery photo is optional. You can mark this order as Delivered with or without a photo.</p><label class="field">Proof photo (optional)<input id="proof-photo" type="file" accept="image/*"></label><p class="photo-help">For this demo, keep the photo below 1.5 MB.</p><div class="photo-upload-preview" id="proof-preview"><div class="photo-placeholder"><span>Proof photo</span><small>Add a photo only if needed</small></div></div><div class="two-button"><button class="primary" type="submit">Mark Delivered</button></div></form>');
     document.getElementById('proof-photo').addEventListener('change', function (event) {
       var file = event.target.files[0];
       if (!file) return;
@@ -502,10 +611,11 @@
     document.getElementById('proof-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var file = document.getElementById('proof-photo').files[0];
-      if (!file) return;
-      try { order.proofOfDelivery = await imageToDataUrl(file); } catch (error) { return toast('The proof photo could not be saved.'); }
+      if (file) {
+        try { order.proofOfDelivery = await imageToDataUrl(file); } catch (error) { return toast('The proof photo could not be saved.'); }
+      }
       order.status = 'Delivered'; order.deliveredAt = new Date().toLocaleString();
-      saveState(); closeModal(); renderAdminPage(); toast('Proof saved and order marked Delivered.');
+      saveState(); closeModal(); renderAdminPage(); toast(file ? 'Proof saved and order marked Delivered.' : 'Order marked Delivered without a proof photo.');
     });
   }
 
@@ -658,16 +768,46 @@
     reader.readAsText(file);
   }
 
+  function applyVoucherPrintSize(size) {
+    var paper = size === 'a5' ? 'a5' : 'a4';
+    var voucher = document.querySelector('.voucher');
+    if (voucher) {
+      voucher.classList.toggle('print-a5', paper === 'a5');
+      voucher.classList.toggle('print-a4', paper === 'a4');
+    }
+    var style = document.getElementById('voucher-print-paper-style');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'voucher-print-paper-style';
+      document.head.appendChild(style);
+    }
+    style.textContent = '@media print { @page { size: ' + (paper === 'a5' ? 'A5' : 'A4') + ' portrait; margin: ' + (paper === 'a5' ? '7mm' : '10mm') + '; } }';
+    localStorage.setItem('yadanar-voucher-paper-size', paper);
+  }
+
   function renderVoucher(orderId) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order || (currentUser.role !== 'owner' && currentUser.id !== order.customerId)) return;
     var voucher = state.settings.voucher;
+    var isCustomer = currentUser.role === 'customer';
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
-      return product ? '<tr><td>' + esc(product.name) + '</td><td>' + item.quantity + '</td><td>' + money(itemPrice(item) * item.quantity) + '</td></tr>' : '';
+      return product ? '<tr><td>' + esc(product.name) + '</td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td></tr>' : '';
     }).join('');
     modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>#YT-' + order.id + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>#YT-' + order.id + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
-    document.getElementById('print-voucher').addEventListener('click', function () { window.print(); });
+    if (isCustomer) {
+      var headers = document.querySelectorAll('.voucher table thead th');
+      if (headers[2]) headers[2].textContent = 'Price';
+      var voucherTotal = document.querySelector('.voucher .cart-total');
+      if (voucherTotal) voucherTotal.remove();
+    }
+    var savedPaper = localStorage.getItem('yadanar-voucher-paper-size') || 'a4';
+    var printButton = document.getElementById('print-voucher');
+    printButton.insertAdjacentHTML('beforebegin', '<label class="voucher-print-size">Print size<select id="voucher-paper-size"><option value="a4" ' + (savedPaper === 'a4' ? 'selected' : '') + '>A4</option><option value="a5" ' + (savedPaper === 'a5' ? 'selected' : '') + '>A5</option></select></label>');
+    var paperSize = document.getElementById('voucher-paper-size');
+    applyVoucherPrintSize(savedPaper);
+    paperSize.addEventListener('change', function () { applyVoucherPrintSize(paperSize.value); });
+    printButton.addEventListener('click', function () { applyVoucherPrintSize(paperSize.value); window.print(); });
   }
 
   function logout() {
