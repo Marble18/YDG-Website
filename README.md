@@ -1,15 +1,12 @@
 # Yadanar Theingi Stationery & Fancy — Ordering System Demo
 
-This is an interactive front-end prototype for the planned customer ordering and owner inventory system.
+This repository is being migrated from an interactive front-end prototype to a Supabase-backed ecommerce system.
+
+Current architecture, completed migrations, known risks and next milestones are recorded in [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md).
 
 ## Open the demo
 
 Open index.html in a modern browser.
-
-Demo accounts:
-
-- Owner: owner / Owner123
-- Customer: mya / Mya123
 
 ## Included functions
 
@@ -32,7 +29,7 @@ Demo accounts:
 
 ## Important before launch
 
-The demo deliberately stores its data only in the current browser using local storage. It is suitable for reviewing the screen design and workflow, but it is **not yet a live multi-user website**.
+Authentication, products, categories, inventory and product images now use Supabase. Orders, carts, customer management and several settings still require migration from browser Local Storage before the system is ready for real customers.
 
 For the production version, add:
 
