@@ -6,6 +6,7 @@
   var SUPABASE_URL = 'https://tfvwfpvdqcbgqnijhhpd.supabase.co';
   var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_1TYSPsIChtMyo_NjcSHQZg_A7uS0PsX';
   var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
   var currentUser = null;
   var adminPage = 'dashboard';
@@ -280,7 +281,8 @@
   }
 
   function renderLogin() {
-    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Secure owner portal</p><h2>Welcome back</h2><p class="subtext">Sign in with the owner email and password registered in Supabase.</p><label class="field">Email<input name="email" type="email" required autocomplete="email"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><div class="login-order-note"><b>Note</b><br>Order တင်လိုပါက Viber Number 09780000146 သို့ အရင် ဆက်သွယ်ပေးပါ။</div></form></div></section>';
+    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Secure owner portal</p><h2>Welcome back</h2><p class="subtext">Sign in with the owner email and password registered in Supabase.</p><label class="field">Email<input name="email" type="email" required autocomplete="email"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><button class="text-link full" id="forgot-password" type="button">Forgot password?</button><div class="login-order-note"><b>Note</b><br>Order တင်လိုပါက Viber Number 09780000146 သို့ အရင် ဆက်သွယ်ပေးပါ။</div></form></div></section>';
+    document.getElementById('forgot-password').addEventListener('click', renderForgotPassword);
     document.getElementById('login-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
@@ -308,6 +310,55 @@
         button.disabled = false;
         button.textContent = 'Sign in';
       }
+    });
+  }
+
+  function renderForgotPassword() {
+    document.getElementById('app').innerHTML = '<section class="login-page"><form class="login-card" id="forgot-password-form"><p class="eyebrow">Account recovery</p><h2>Reset your password</h2><p class="subtext">Enter the owner email address. We will send a secure password reset link.</p><label class="field">Email<input name="email" type="email" required autocomplete="email"></label><button class="primary full" type="submit">Send recovery email</button><button class="text-link full" id="back-to-login" type="button">Back to sign in</button></form></section>';
+    document.getElementById('back-to-login').addEventListener('click', renderLogin);
+    document.getElementById('forgot-password-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var email = String(new FormData(event.target).get('email')).trim();
+      var button = event.target.querySelector('button[type="submit"]');
+      button.disabled = true;
+      button.textContent = 'Sending…';
+      var result = await supabaseClient.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin + window.location.pathname
+      });
+      if (result.error) {
+        toast(result.error.message);
+        button.disabled = false;
+        button.textContent = 'Send recovery email';
+        return;
+      }
+      renderLogin();
+      toast('Recovery email sent. Open the newest link in your inbox.');
+    });
+  }
+
+  function renderPasswordRecovery() {
+    passwordRecoveryMode = true;
+    document.getElementById('app').innerHTML = '<section class="login-page"><form class="login-card" id="new-password-form"><p class="eyebrow">Secure recovery</p><h2>Choose a new password</h2><p class="subtext">Use at least 12 characters with uppercase, lowercase, a number and a symbol.</p><label class="field">New password<input name="password" type="password" minlength="12" required autocomplete="new-password"></label><label class="field">Confirm password<input name="confirmPassword" type="password" minlength="12" required autocomplete="new-password"></label><button class="primary full" type="submit">Update password</button></form></section>';
+    document.getElementById('new-password-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var data = new FormData(event.target);
+      var password = String(data.get('password'));
+      if (password !== String(data.get('confirmPassword'))) return toast('The passwords do not match.');
+      var button = event.target.querySelector('button[type="submit"]');
+      button.disabled = true;
+      button.textContent = 'Updating…';
+      var result = await supabaseClient.auth.updateUser({ password: password });
+      if (result.error) {
+        toast(result.error.message);
+        button.disabled = false;
+        button.textContent = 'Update password';
+        return;
+      }
+      await supabaseClient.auth.signOut();
+      passwordRecoveryMode = false;
+      window.history.replaceState({}, document.title, window.location.pathname);
+      renderLogin();
+      toast('Password updated. Sign in with your new password.');
     });
   }
 
@@ -981,6 +1032,7 @@
     try {
       var sessionResult = await supabaseClient.auth.getSession();
       var session = sessionResult.data.session;
+      if (passwordRecoveryMode && session) return renderPasswordRecovery();
       if (!session) return renderLogin();
 
       currentUser = await loadAuthenticatedUser(session.user);
@@ -998,6 +1050,10 @@
       toast(error.message || 'Unable to restore your session.');
     }
   }
+
+  supabaseClient.auth.onAuthStateChange(function (event) {
+    if (event === 'PASSWORD_RECOVERY') renderPasswordRecovery();
+  });
 
   startApp();
 }());
