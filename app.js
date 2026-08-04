@@ -119,7 +119,7 @@
   }
 
   function getProduct(id) {
-    return state.products.find(function (product) { return product.id === Number(id); });
+    return state.products.find(function (product) { return String(product.id) === String(id); });
   }
 
   function applyTheme(theme) {
@@ -139,7 +139,7 @@
   function photoMarkup(product, className) {
     var photo = String(product.photo || '');
     var classes = className ? ' class="' + className + '"' : '';
-    if (photo.indexOf('data:image/') === 0) return '<img' + classes + ' src="' + esc(photo) + '" alt="' + esc(product.name) + '">';
+    if (photo.indexOf('data:image/') === 0 || photo.indexOf('https://') === 0) return '<img' + classes + ' src="' + esc(photo) + '" alt="' + esc(product.name) + '">';
     if (className) return '<div' + classes + '><div class="photo-placeholder"><span>Product photo</span><small>Owner will add a photo</small></div></div>';
     return '<div class="photo-placeholder"><span>Product photo</span><small>Owner will add a photo</small></div>';
   }
@@ -211,6 +211,74 @@
     return profileToCurrentUser(result.data, authUser.email || '');
   }
 
+  function mapDatabaseProduct(row) {
+    return {
+      id: row.id,
+      name: row.name,
+      category: row.categories ? row.categories.name : 'Uncategorized',
+      categoryId: row.category_id,
+      price: Number(row.price),
+      stock: Number(row.stock_quantity),
+      photo: row.image_url || '',
+      bg: '#f3e8ec',
+      deleted: !row.is_active
+    };
+  }
+
+  async function loadCatalogueData() {
+    var productsResult = await supabaseClient
+      .from('products')
+      .select('id, name, description, price, stock_quantity, image_url, is_active, category_id, categories(name)')
+      .order('created_at', { ascending: true });
+    if (productsResult.error) throw productsResult.error;
+
+    var inventoryResult = await supabaseClient
+      .from('inventory_movements')
+      .select('id, product_id, movement_type, quantity, note, created_at, products(name)')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (inventoryResult.error) throw inventoryResult.error;
+
+    state.products = productsResult.data.map(mapDatabaseProduct);
+    state.inventory = inventoryResult.data.map(function (row) {
+      return {
+        id: row.id,
+        productId: row.product_id,
+        product: row.products ? row.products.name : 'Unknown product',
+        type: row.movement_type === 'stock_in' ? 'IN' : (row.movement_type === 'stock_out' ? 'OUT' : 'ADJUST'),
+        quantity: row.quantity,
+        date: new Date(row.created_at).toLocaleDateString('en-GB'),
+        note: row.note || ''
+      };
+    });
+  }
+
+  async function findOrCreateCategory(name) {
+    var categoryName = String(name).trim();
+    var existing = await supabaseClient.from('categories').select('id, name').ilike('name', categoryName).maybeSingle();
+    if (existing.error) throw existing.error;
+    if (existing.data) return existing.data;
+
+    var created = await supabaseClient.from('categories').insert({ name: categoryName, is_active: true }).select('id, name').single();
+    if (created.error) throw created.error;
+    return created.data;
+  }
+
+  async function uploadProductImage(productId, file) {
+    var extension = String(file.name).split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+    var path = productId + '/' + Date.now() + '.' + extension;
+    var upload = await supabaseClient.storage.from('product-images').upload(path, file, { upsert: false });
+    if (upload.error) throw upload.error;
+    return supabaseClient.storage.from('product-images').getPublicUrl(path).data.publicUrl;
+  }
+
+  async function refreshCataloguePage(message) {
+    await loadCatalogueData();
+    closeModal();
+    renderAdminPage();
+    if (message) toast(message);
+  }
+
   function renderLogin() {
     document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Secure owner portal</p><h2>Welcome back</h2><p class="subtext">Sign in with the owner email and password registered in Supabase.</p><label class="field">Email<input name="email" type="email" required autocomplete="email"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><div class="login-order-note"><b>Note</b><br>Order တင်လိုပါက Viber Number 09780000146 သို့ အရင် ဆက်သွယ်ပေးပါ။</div></form></div></section>';
     document.getElementById('login-form').addEventListener('submit', async function (event) {
@@ -233,6 +301,7 @@
           currentUser = null;
           throw new Error('Customer login will be enabled in the next setup stage.');
         }
+        await loadCatalogueData();
         renderAdmin();
       } catch (error) {
         toast(error.message === 'Invalid login credentials' ? 'Email or password is incorrect.' : error.message);
@@ -271,7 +340,7 @@
     var products = state.products.filter(function (product) { return !product.deleted && (customerCategory === 'All' || product.category === customerCategory) && (product.name.toLowerCase().indexOf(search) > -1 || product.category.toLowerCase().indexOf(search) > -1); });
     document.getElementById('product-count').textContent = products.length + ' items available';
     document.getElementById('product-grid').innerHTML = products.length ? products.map(function (product) {
-      var hasPhoto = String(product.photo || '').indexOf('data:image/') === 0;
+      var hasPhoto = /^(data:image\/|https:\/\/)/.test(String(product.photo || ''));
       var photo = hasPhoto ? '<button class="product-photo photo-preview-button" data-preview-photo="' + product.id + '" aria-label="Preview ' + esc(product.name) + '" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</button>' : '<div class="product-photo" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</div>';
       return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + '</span><span>' + (product.stock ? product.stock + ' in stock' : 'Out of stock') + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="1" max="' + product.stock + '" value="1" ' + (product.stock ? '' : 'disabled') + '><button class="primary add-to-cart" data-product="' + product.id + '" ' + (product.stock ? '' : 'disabled') + '>Add</button></div></div></article>';
     }).join('') : '<div class="empty">No matching products found.</div>';
@@ -500,9 +569,9 @@
   function bindAdmin() {
     document.querySelectorAll('[data-go]').forEach(function (button) { button.addEventListener('click', function () { adminPage = button.dataset.go; renderAdminPage(); }); });
     bindOrderTableActions(document);
-    document.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(Number(button.dataset.editProduct)); }); });
-    document.querySelectorAll('[data-manual-stock]').forEach(function (button) { button.addEventListener('click', function () { renderManualStockAdjust(Number(button.dataset.manualStock)); }); });
-    document.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(Number(button.dataset.deleteProduct)); }); });
+    document.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(button.dataset.editProduct); }); });
+    document.querySelectorAll('[data-manual-stock]').forEach(function (button) { button.addEventListener('click', function () { renderManualStockAdjust(button.dataset.manualStock); }); });
+    document.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(button.dataset.deleteProduct); }); });
     document.querySelectorAll('[data-toggle-customer]').forEach(function (button) { button.addEventListener('click', function () { var user = state.users.find(function (entry) { return entry.id === Number(button.dataset.toggleCustomer); }); user.status = user.status === 'Active' ? 'Disabled' : 'Active'; saveState(); renderAdminPage(); toast('Customer access updated.'); }); });
     var newProduct = document.getElementById('new-product'); if (newProduct) newProduct.addEventListener('click', function () { renderProductForm(); });
     var adjustCategory = document.getElementById('adjust-category'); if (adjustCategory) adjustCategory.addEventListener('click', renderCategoryAdjust);
@@ -669,22 +738,40 @@
 
   function renderProductForm(productId) {
     var product = productId ? getProduct(productId) : null;
-    modal('<form id="product-form"><div class="modal-head"><div><p class="eyebrow">Catalogue</p><h2>' + (product ? 'Edit product' : 'Add product') + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="form-grid"><label class="field full-field">Product name<input name="name" required value="' + (product ? esc(product.name) : '') + '"></label><label class="field">Category<input name="category" required value="' + (product ? esc(product.category) : '') + '"></label><label class="field">Price (MMK)<input name="price" type="number" min="0" required value="' + (product ? product.price : '') + '"></label><label class="field">Current stock<input name="stock" type="number" min="0" required value="' + (product ? product.stock : '') + '"></label><label class="field full-field">Product photo<input id="product-photo" type="file" accept="image/*" ' + (product ? '' : 'required') + '></label><p class="photo-help full-field">For this demo, use a clear photo smaller than 1.5 MB.</p><div class="photo-upload-preview full-field" id="product-preview">' + photoMarkup(product || { name: 'New product', photo: '' }) + '</div></div><div class="two-button"><button class="primary" type="submit">Save product</button></div></form>');
+    modal('<form id="product-form"><div class="modal-head"><div><p class="eyebrow">Catalogue</p><h2>' + (product ? 'Edit product' : 'Add product') + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="form-grid"><label class="field full-field">Product name<input name="name" required value="' + (product ? esc(product.name) : '') + '"></label><label class="field">Category<input name="category" required value="' + (product ? esc(product.category) : '') + '"></label><label class="field">Price (MMK)<input name="price" type="number" min="0" required value="' + (product ? product.price : '') + '"></label><label class="field">Current stock<input name="stock" type="number" min="0" step="1" required value="' + (product ? product.stock : '') + '"></label><label class="field full-field">Product photo<input id="product-photo" type="file" accept="image/jpeg,image/png,image/webp"></label><p class="photo-help full-field">JPEG, PNG or WebP. Maximum file size: 500 KB.</p><div class="photo-upload-preview full-field" id="product-preview">' + photoMarkup(product || { name: 'New product', photo: '' }) + '</div></div><div class="two-button"><button class="primary" type="submit">Save product</button></div></form>');
     document.getElementById('product-photo').addEventListener('change', function (event) {
       var file = event.target.files[0];
       if (!file) return;
-      if (file.size > 1500000) { event.target.value = ''; return toast('Choose a product photo smaller than 1.5 MB for this demo.'); }
+      if (file.size > 500000) { event.target.value = ''; return toast('Choose a product photo smaller than 500 KB.'); }
       imageToDataUrl(file).then(function (src) { document.getElementById('product-preview').innerHTML = '<img src="' + esc(src) + '" alt="Product preview">'; });
     });
     document.getElementById('product-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
+      var price = Number(data.get('price'));
+      var stock = Number(data.get('stock'));
+      if (!Number.isFinite(price) || price < 0) return toast('Enter a valid product price.');
+      if (!Number.isInteger(stock) || stock < 0) return toast('Enter a whole stock quantity of 0 or more.');
+      var productIdValue = product ? product.id : crypto.randomUUID();
       var photo = product ? product.photo : '';
       var file = document.getElementById('product-photo').files[0];
-      if (file) { try { photo = await imageToDataUrl(file); } catch (error) { return toast('The product photo could not be saved.'); } }
-      if (product) { product.name = data.get('name'); product.category = data.get('category'); product.price = Number(data.get('price')); product.stock = Number(data.get('stock')); product.photo = photo; }
-      else state.products.push({ id: Date.now(), name: data.get('name'), category: data.get('category'), price: Number(data.get('price')), stock: Number(data.get('stock')), photo: photo, bg: '#f3e8ec' });
-      saveState(); closeModal(); renderAdminPage(); toast('Product saved.');
+      var submitButton = event.target.querySelector('button[type="submit"]');
+      submitButton.disabled = true;
+      submitButton.textContent = 'Saving…';
+      try {
+        var category = await findOrCreateCategory(data.get('category'));
+        if (file) photo = await uploadProductImage(productIdValue, file);
+        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, image_url: photo || null, is_active: true };
+        var result = product
+          ? await supabaseClient.from('products').update(values).eq('id', product.id)
+          : await supabaseClient.from('products').insert(values);
+        if (result.error) throw result.error;
+        await refreshCataloguePage('Product saved to the database.');
+      } catch (error) {
+        toast(error.message || 'The product could not be saved.');
+        submitButton.disabled = false;
+        submitButton.textContent = 'Save product';
+      }
     });
   }
 
@@ -692,17 +779,29 @@
     var product = getProduct(productId);
     if (!product || product.deleted) return;
     modal('<form id="manual-stock-form"><div class="modal-head"><div><p class="eyebrow">Manual stock adjustment</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Set the exact current stock quantity. The system will automatically add an IN or OUT inventory record for the difference.</p><div class="form-grid"><label class="field">Current stock<input value="' + product.stock + '" disabled></label><label class="field">New stock quantity<input name="newStock" type="number" min="0" step="1" required value="' + product.stock + '"></label><label class="field full-field">Adjustment note<input name="note" placeholder="Stock count, damaged items, correction..."></label></div><div class="two-button"><button class="primary" type="submit">Save stock adjustment</button></div></form>');
-    document.getElementById('manual-stock-form').addEventListener('submit', function (event) {
+    document.getElementById('manual-stock-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
       var newStock = Number(data.get('newStock'));
       if (!Number.isInteger(newStock) || newStock < 0) return toast('Enter a whole stock quantity of 0 or more.');
       var difference = newStock - product.stock;
-      product.stock = newStock;
-      if (difference !== 0) {
-        state.inventory.unshift({ id: Date.now() + product.id, productId: product.id, product: product.name, type: difference > 0 ? 'IN' : 'OUT', quantity: Math.abs(difference), date: today(), note: data.get('note') || 'Manual stock adjustment' });
-      }
-      saveState(); closeModal(); renderAdminPage(); toast('Stock updated to ' + newStock + '.');
+      try {
+        var update = await supabaseClient.from('products').update({ stock_quantity: newStock }).eq('id', product.id);
+        if (update.error) throw update.error;
+        if (difference !== 0) {
+          var movement = await supabaseClient.from('inventory_movements').insert({
+            product_id: product.id,
+            movement_type: 'adjustment',
+            quantity: Math.abs(difference),
+            previous_stock: product.stock,
+            resulting_stock: newStock,
+            note: data.get('note') || 'Manual stock adjustment',
+            created_by: currentUser.id
+          });
+          if (movement.error) throw movement.error;
+        }
+        await refreshCataloguePage('Stock updated to ' + newStock + '.');
+      } catch (error) { toast(error.message || 'Stock could not be updated.'); }
     });
   }
 
@@ -711,38 +810,58 @@
     if (!product || product.deleted) return;
     modal('<form id="delete-product-form"><div class="modal-head"><div><p class="eyebrow">Delete product</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">This removes the product from the customer catalogue and Owner Products list. Existing order and inventory history will be kept safely.</p><div class="two-button"><button class="secondary" id="cancel-delete" type="button">Cancel</button><button class="primary" type="submit">Delete product</button></div></form>');
     document.getElementById('cancel-delete').addEventListener('click', closeModal);
-    document.getElementById('delete-product-form').addEventListener('submit', function (event) {
+    document.getElementById('delete-product-form').addEventListener('submit', async function (event) {
       event.preventDefault();
-      product.deleted = true;
-      saveState(); closeModal(); renderAdminPage(); toast(product.name + ' was removed from the sales catalogue.');
+      var result = await supabaseClient.from('products').update({ is_active: false }).eq('id', product.id);
+      if (result.error) return toast(result.error.message);
+      await refreshCataloguePage(product.name + ' was removed from the sales catalogue.');
     });
   }
 
   function renderCategoryAdjust() {
     var categories = state.products.filter(function (product) { return !product.deleted; }).map(function (product) { return product.category; }).filter(function (value, index, list) { return list.indexOf(value) === index; }).sort();
     modal('<form id="category-form"><div class="modal-head"><div><p class="eyebrow">Pricing tool</p><h2>Adjust category prices</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Increase or reduce every product in one category at the same time.</p><label class="field">Category<select name="category">' + categories.map(function (category) { return '<option value="' + esc(category) + '">' + esc(category) + '</option>'; }).join('') + '</select></label><label class="field">Percentage change<input name="percentage" type="number" min="-100" step="0.01" required placeholder="Example: 10 or -5"></label><p class="photo-help">10 increases by 10%. -5 reduces by 5%. Prices are rounded to the nearest 50 MMK.</p><div class="two-button"><button class="primary" type="submit">Apply price change</button></div></form>');
-    document.getElementById('category-form').addEventListener('submit', function (event) {
+    document.getElementById('category-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
       var percentage = Number(data.get('percentage'));
       if (!Number.isFinite(percentage)) return toast('Enter a valid percentage.');
       var changed = state.products.filter(function (product) { return !product.deleted && product.category === data.get('category'); });
-      changed.forEach(function (product) { product.price = Math.max(0, Math.round(product.price * (1 + percentage / 100) / 50) * 50); });
-      saveState(); closeModal(); renderAdminPage(); toast(changed.length + ' product price(s) updated.');
+      try {
+        await Promise.all(changed.map(function (product) {
+          var newPrice = Math.max(0, Math.round(product.price * (1 + percentage / 100) / 50) * 50);
+          return supabaseClient.from('products').update({ price: newPrice }).eq('id', product.id).then(function (result) { if (result.error) throw result.error; });
+        }));
+        await refreshCataloguePage(changed.length + ' product price(s) updated.');
+      } catch (error) { toast(error.message || 'Category prices could not be updated.'); }
     });
   }
 
   function renderStockForm() {
     modal('<form id="stock-form"><div class="modal-head"><div><p class="eyebrow">Inventory</p><h2>Record stock movement</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><label class="field">Product<select name="productId">' + state.products.filter(function (product) { return !product.deleted; }).map(function (product) { return '<option value="' + product.id + '">' + esc(product.name) + ' (' + product.stock + ' in stock)</option>'; }).join('') + '</select></label><div class="form-grid"><label class="field">Movement<select name="type"><option value="IN">Stock in</option><option value="OUT">Stock out</option></select></label><label class="field">Quantity<input name="quantity" type="number" min="1" value="1"></label><label class="field full-field">Note<input name="note"></label></div><div class="two-button"><button class="primary" type="submit">Record movement</button></div></form>');
-    document.getElementById('stock-form').addEventListener('submit', function (event) {
+    document.getElementById('stock-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
-      var product = getProduct(Number(data.get('productId')));
+      var product = getProduct(data.get('productId'));
       var quantity = Number(data.get('quantity'));
+      if (!Number.isInteger(quantity) || quantity < 1) return toast('Enter a whole quantity of 1 or more.');
       if (data.get('type') === 'OUT' && quantity > product.stock) return toast('Stock out quantity exceeds current stock.');
-      product.stock += data.get('type') === 'IN' ? quantity : -quantity;
-      state.inventory.unshift({ id: Date.now(), productId: product.id, product: product.name, type: data.get('type'), quantity: quantity, date: today(), note: data.get('note') || 'Manual adjustment' });
-      saveState(); closeModal(); renderAdminPage(); toast('Inventory movement recorded.');
+      var resultingStock = product.stock + (data.get('type') === 'IN' ? quantity : -quantity);
+      try {
+        var update = await supabaseClient.from('products').update({ stock_quantity: resultingStock }).eq('id', product.id);
+        if (update.error) throw update.error;
+        var movement = await supabaseClient.from('inventory_movements').insert({
+          product_id: product.id,
+          movement_type: data.get('type') === 'IN' ? 'stock_in' : 'stock_out',
+          quantity: quantity,
+          previous_stock: product.stock,
+          resulting_stock: resultingStock,
+          note: data.get('note') || 'Manual adjustment',
+          created_by: currentUser.id
+        });
+        if (movement.error) throw movement.error;
+        await refreshCataloguePage('Inventory movement recorded.');
+      } catch (error) { toast(error.message || 'Inventory movement could not be saved.'); }
     });
   }
 
@@ -865,7 +984,10 @@
       if (!session) return renderLogin();
 
       currentUser = await loadAuthenticatedUser(session.user);
-      if (currentUser.role === 'owner' || currentUser.role === 'staff') return renderAdmin();
+      if (currentUser.role === 'owner' || currentUser.role === 'staff') {
+        await loadCatalogueData();
+        return renderAdmin();
+      }
       await supabaseClient.auth.signOut();
       currentUser = null;
       renderLogin();
