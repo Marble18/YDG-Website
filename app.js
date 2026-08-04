@@ -3,6 +3,9 @@
 
   var STORAGE = 'yt-stationery-demo-v2';
   var AUTO_BACKUP = 'yt-stationery-auto-backup-v2';
+  var SUPABASE_URL = 'https://tfvwfpvdqcbgqnijhhpd.supabase.co';
+  var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_1TYSPsIChtMyo_NjcSHQZg_A7uS0PsX';
+  var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
   var state = loadState();
   var currentUser = null;
   var adminPage = 'dashboard';
@@ -25,9 +28,9 @@
         { id: 8, name: 'Gift Wrap Bundle', category: 'Fancy', price: 7500, stock: 9, photo: '', bg: '#f6e5df' }
       ],
       users: [
-        { id: 1, username: 'owner', password: 'Owner123', name: 'Yadanar Theingi Owner', role: 'owner', status: 'Active', created: '26 Jul 2026' },
-        { id: 2, username: 'mya', password: 'Mya123', name: 'Mya Thiri', role: 'customer', status: 'Active', created: '20 Jul 2026' },
-        { id: 3, username: 'aung', password: 'AungMin123', name: 'Aung Min', role: 'customer', status: 'Active', created: '22 Jul 2026' }
+        { id: 1, username: 'owner', name: 'Yadanar Theingi Owner', role: 'owner', status: 'Active', created: '26 Jul 2026' },
+        { id: 2, username: 'mya', name: 'Mya Thiri', role: 'customer', status: 'Active', created: '20 Jul 2026' },
+        { id: 3, username: 'aung', name: 'Aung Min', role: 'customer', status: 'Active', created: '22 Jul 2026' }
       ],
       orders: [
         { id: 1008, customerId: 2, customer: 'Mya Thiri', items: [{ productId: 1, quantity: 2, unitPrice: 6500 }, { productId: 3, quantity: 1, unitPrice: 2800 }], total: 15800, status: 'Pending', date: '26 Jul 2026', phone: '09 420 000 111', address: 'Sanchaung Township, Yangon', busStation: '', deliveryDate: '', note: 'Please pack carefully.', adjusted: false },
@@ -62,6 +65,7 @@
     data.settings.voucher.title = data.settings.voucher.title || defaults.voucher.title;
     data.settings.voucher.footer = data.settings.voucher.footer || defaults.voucher.footer;
     data.settings.voucher.accentColor = data.settings.voucher.accentColor || defaults.voucher.accentColor;
+    data.users.forEach(function (user) { delete user.password; });
     data.orders.forEach(function (order) {
       if (order.status === 'Confirmed') order.status = 'Approved';
       if (order.status === 'Preparing') order.status = 'Processing';
@@ -76,7 +80,11 @@
   function loadState() {
     try {
       var saved = JSON.parse(localStorage.getItem(STORAGE));
-      if (saved && saved.products && saved.users && saved.orders) return normalize(saved);
+      if (saved && saved.products && saved.users && saved.orders) {
+        var normalized = normalize(saved);
+        localStorage.setItem(STORAGE, JSON.stringify(normalized));
+        return normalized;
+      }
     } catch (error) { }
     var fresh = seedState();
     localStorage.setItem(STORAGE, JSON.stringify(fresh));
@@ -181,16 +189,56 @@
     return '<header class="topbar"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><div class="top-actions">' + (hasCart ? '<button class="cart-button" id="open-cart">Cart <span class="cart-count">' + cartCount() + '</span></button>' : '') + customerMenu + '</div></header>';
   }
 
+  function profileToCurrentUser(profile, email) {
+    return {
+      id: profile.id,
+      username: profile.username || email,
+      name: profile.full_name || profile.username || email,
+      role: profile.role,
+      status: profile.is_active ? 'Active' : 'Disabled'
+    };
+  }
+
+  async function loadAuthenticatedUser(authUser) {
+    var result = await supabaseClient
+      .from('profiles')
+      .select('id, username, full_name, role, is_active')
+      .eq('id', authUser.id)
+      .single();
+
+    if (result.error || !result.data) throw new Error('Your account profile could not be loaded.');
+    if (!result.data.is_active) throw new Error('This account has been disabled.');
+    return profileToCurrentUser(result.data, authUser.email || '');
+  }
+
   function renderLogin() {
-    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Customer ordering portal</p><h2>Welcome back</h2><p class="subtext">' + (state.settings.maintenanceMode ? 'Customer ordering is under maintenance. Owner accounts can still sign in to manage the site.' : 'Sign in with the account supplied by Yadanar Theingi.') + '</p><label class="field">Username<input name="username" required autocomplete="username"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><div class="login-order-note"><b>Note</b><br>Order တင်လိုပါက Viber Number 09780000146 သို အရင် ဆက်သွယ်ပေးပါ။</div><div class="demo-credentials"><b>Demo access</b><br>Owner: <b>owner / Owner123</b><br>Customer: <b>mya / Mya123</b></div></form></div></section>';
-    document.getElementById('login-form').addEventListener('submit', function (event) {
+    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Secure owner portal</p><h2>Welcome back</h2><p class="subtext">Sign in with the owner email and password registered in Supabase.</p><label class="field">Email<input name="email" type="email" required autocomplete="email"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><div class="login-order-note"><b>Note</b><br>Order တင်လိုပါက Viber Number 09780000146 သို့ အရင် ဆက်သွယ်ပေးပါ။</div></form></div></section>';
+    document.getElementById('login-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
-      var user = state.users.find(function (entry) { return entry.username === String(data.get('username')).trim() && entry.password === data.get('password') && entry.status === 'Active'; });
-      if (!user) return toast('Username or password is incorrect.');
-      if (state.settings.maintenanceMode && user.role === 'customer') return toast('Under Maintenance: customer ordering is temporarily unavailable.');
-      currentUser = user;
-      if (user.role === 'owner') renderAdmin(); else renderCustomer();
+      var button = event.target.querySelector('button[type="submit"]');
+      button.disabled = true;
+      button.textContent = 'Signing in…';
+
+      try {
+        var authResult = await supabaseClient.auth.signInWithPassword({
+          email: String(data.get('email')).trim(),
+          password: String(data.get('password'))
+        });
+        if (authResult.error) throw authResult.error;
+
+        currentUser = await loadAuthenticatedUser(authResult.data.user);
+        if (currentUser.role !== 'owner' && currentUser.role !== 'staff') {
+          await supabaseClient.auth.signOut();
+          currentUser = null;
+          throw new Error('Customer login will be enabled in the next setup stage.');
+        }
+        renderAdmin();
+      } catch (error) {
+        toast(error.message === 'Invalid login credentials' ? 'Email or password is incorrect.' : error.message);
+        button.disabled = false;
+        button.textContent = 'Sign in';
+      }
     });
   }
 
@@ -700,15 +748,8 @@
 
   function renderAccountForm(role) {
     var label = role === 'owner' ? 'Owner' : 'Customer';
-    modal('<form id="account-form"><div class="modal-head"><div><p class="eyebrow">Access control</p><h2>Create ' + label.toLowerCase() + ' account</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">' + (role === 'owner' ? 'Owner accounts can manage all sections of the system.' : 'Customer accounts can only view products and place their own orders.') + '</p><div class="form-grid"><label class="field full-field">' + label + ' name<input name="name" required></label><label class="field">Username<input name="username" required></label><label class="field">Temporary password<input name="password" required></label></div><div class="two-button"><button class="primary" type="submit">Create account</button></div></form>');
-    document.getElementById('account-form').addEventListener('submit', function (event) {
-      event.preventDefault();
-      var data = new FormData(event.target);
-      var username = String(data.get('username')).trim();
-      if (state.users.some(function (user) { return user.username.toLowerCase() === username.toLowerCase(); })) return toast('That username is already in use.');
-      state.users.push({ id: Date.now(), name: data.get('name'), username: username, password: data.get('password'), role: role, status: 'Active', created: today() });
-      saveState(); closeModal(); renderAdminPage(); toast(label + ' account created.');
-    });
+    modal('<div><div class="modal-head"><div><p class="eyebrow">Secure access control</p><h2>' + label + ' account setup</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Account creation is temporarily unavailable while secure username accounts are moved to Supabase. No password will be stored in this browser.</p><div class="two-button"><button class="primary" id="close-account-notice" type="button">Close</button></div></div>');
+    document.getElementById('close-account-notice').addEventListener('click', closeModal);
   }
 
   function saveSiteSettings(event) {
@@ -758,7 +799,6 @@
         localStorage.setItem(AUTO_BACKUP, JSON.stringify({ createdAt: new Date().toISOString(), data: state }));
         state = normalize(restored);
         localStorage.setItem(STORAGE, JSON.stringify(state));
-        currentUser = state.users.find(function (user) { return user.role === 'owner' && user.status === 'Active'; }) || null;
         if (currentUser) renderAdmin(); else renderLogin();
         toast('Backup restored successfully.');
       } catch (error) {
@@ -810,11 +850,32 @@
     printButton.addEventListener('click', function () { applyVoucherPrintSize(paperSize.value); window.print(); });
   }
 
-  function logout() {
+  async function logout() {
+    await supabaseClient.auth.signOut();
     currentUser = null;
     adminPage = 'dashboard';
     renderLogin();
   }
 
-  renderLogin();
+  async function startApp() {
+    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-card"><h2>Loading…</h2><p class="subtext">Checking your secure session.</p></div></section>';
+    try {
+      var sessionResult = await supabaseClient.auth.getSession();
+      var session = sessionResult.data.session;
+      if (!session) return renderLogin();
+
+      currentUser = await loadAuthenticatedUser(session.user);
+      if (currentUser.role === 'owner' || currentUser.role === 'staff') return renderAdmin();
+      await supabaseClient.auth.signOut();
+      currentUser = null;
+      renderLogin();
+    } catch (error) {
+      await supabaseClient.auth.signOut();
+      currentUser = null;
+      renderLogin();
+      toast(error.message || 'Unable to restore your session.');
+    }
+  }
+
+  startApp();
 }());
