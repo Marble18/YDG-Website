@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-08-04
+Last updated: 2026-08-05
 
 ## 1. Project goal
 
@@ -36,6 +36,8 @@ Yadanar Theingi Stationery & Fancy အတွက် မြန်မာအသု�
 - Category names are trimmed and protected by a case-insensitive database unique index; historical case-only duplicates are consolidated by migration.
 - Product photos support browse and drag/drop with identical JPEG/PNG/WebP, 500 KB, preview and status validation.
 - Products store `unit` (`pcs` or `box`) and a positive whole-number `minimum_order_quantity`; existing rows default to `pcs` and `1`.
+- Owner Products provides template-based `.xlsx` export with category and active/inactive filters, sequential numbering, embedded product photos and a Unit column added after the original template columns.
+- Excel export is generated in the browser from the versioned template asset; the source template is never overwritten and no secret key is involved.
 
 ### Database and Storage
 
@@ -137,4 +139,5 @@ First-version decision:
 - 2026-08-05: Chose first-version username login with owner-managed customer/staff passwords, Edge Functions and a replaceable frontend account service layer.
 - 2026-08-05: Applied managed-account RLS migration and deployed both Edge Functions; anonymous login failure and unauthenticated admin denial were verified.
 - 2026-08-05: Completed owner/customer credential, reset and enable/disable end-to-end validation on Netlify deploy preview #5.
-- 2026-08-05: Applied product unit/minimum-order and case-insensitive category-integrity migration for PR #6; product-form UI validation remains pending deploy-preview review.
+- 2026-08-05: Merged PR #6 after product CRUD, image input, category autocomplete, database constraints and mobile layout validation.
+- 2026-08-05: Started PR #7 template-based Product Excel export; the requested Unit column is appended after Stock while minimum quantity remains outside the supplied export format.

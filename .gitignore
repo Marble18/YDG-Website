@@ -1,2 +1,6 @@
 # Supabase CLI local link and temporary files
 supabase/.temp/
+
+# Local validation artifacts
+.codex-tmp/
+outputs/
