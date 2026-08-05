@@ -64,9 +64,15 @@ Database တွင် `profiles`, `categories`, `products`, `orders`, `order_ite
 - Owner can reset a managed account's password.
 - Owner keeps a real email identity for emergency recovery.
 
-This is not complete yet. Supabase Auth uses email/phone identities internally, so username login must be implemented through trusted server-side code such as Supabase Edge Functions. Account creation, username lookup and owner password reset must never use a secret/service-role key in the browser.
+First-version decision:
 
-Before implementation, decide whether “customers cannot change passwords” means only hiding that UI, or technically prohibiting every self-change attempt. The strict version requires a server-controlled auth design and additional security work.
+- Username lookup/login uses a public Edge Function that returns a normal Supabase session after credential validation.
+- Account list/create, enable/disable and owner-managed password reset use an authenticated owner-only Edge Function.
+- The frontend calls these functions through `account-service.js`, keeping the backend contract in one replaceable service layer.
+- Customer password-change and email-recovery controls are not shown. Only an owner can reset managed customer/staff passwords through the UI.
+- The primary owner keeps the existing real-email recovery flow.
+- This test version does not attempt strict custom authentication that technically prevents a knowledgeable signed-in customer from calling Supabase's password-update API directly. That stronger control is deferred intentionally.
+- Secret/service-role credentials remain only in Supabase Edge Function environment variables and never in frontend code or GitHub.
 
 ## 6. Security and consistency rules
 
@@ -81,7 +87,7 @@ Before implementation, decide whether “customers cannot change passwords” me
 ## 7. Known issues and risks
 
 - Supabase built-in email may return `EMAIL RATE LIMIT EXCEEDED`; production recovery needs custom SMTP.
-- Username/password owner-managed accounts and Edge Functions are not implemented yet.
+- Username account code, migrations and Edge Functions must be deployed and validated in the linked Supabase project before production use.
 - Orders, customers, cart, voucher settings and backup flows are not fully migrated from Local Storage.
 - Inventory writes are not yet transactional.
 - README and UI must remain free of usable demo passwords.
@@ -100,12 +106,11 @@ Before implementation, decide whether “customers cannot change passwords” me
 
 ## 9. Recommended next milestones
 
-1. Design and implement secure username account APIs/Edge Functions.
-2. Move customer profiles and owner-managed account UI fully to Supabase.
-3. Move cart and order submission to database transactions/RPC.
-4. Complete owner order management and private delivery-proof flow.
-5. Move voucher, app settings and maintenance mode to Supabase.
-6. Add browser/mobile regression checks and production backup procedure.
+1. Deploy and validate the managed-account migration and Edge Functions.
+2. Move cart and order submission to database transactions/RPC.
+3. Complete owner order management and private delivery-proof flow.
+4. Move voucher, app settings and maintenance mode to Supabase.
+5. Add browser/mobile regression checks and production backup procedure.
 
 ## 10. Validation checklist
 
@@ -125,3 +130,4 @@ Before implementation, decide whether “customers cannot change passwords” me
 - 2026-08-04: Catalogue and inventory migration merged in PR #2.
 - 2026-08-04: Secure password recovery merged in PR #3.
 - 2026-08-04: Added this shared project summary and documented remaining migrations and risks.
+- 2026-08-05: Chose first-version username login with owner-managed customer/staff passwords, Edge Functions and a replaceable frontend account service layer.
