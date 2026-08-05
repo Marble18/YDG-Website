@@ -140,4 +140,4 @@ First-version decision:
 - 2026-08-05: Applied managed-account RLS migration and deployed both Edge Functions; anonymous login failure and unauthenticated admin denial were verified.
 - 2026-08-05: Completed owner/customer credential, reset and enable/disable end-to-end validation on Netlify deploy preview #5.
 - 2026-08-05: Merged PR #6 after product CRUD, image input, category autocomplete, database constraints and mobile layout validation.
-- 2026-08-05: Started PR #7 template-based Product Excel export; the requested Unit column is appended after Stock while minimum quantity remains outside the supplied export format.
+- 2026-08-05: Drafted PR #7 template-based Product Excel export; Unit is appended after Stock, local spreadsheet/runtime samples passed, and deploy-preview empty/success/filter/mobile flows were validated.
