@@ -152,12 +152,46 @@ Proposed transaction order:
 8. Apply the versioned browser demo-state reset in application code.
 9. Run the requested owner, recovery, RLS, empty-state, CRUD/upload, stock, export, unauthorized-access, and Netlify validations.
 
-No Phase 2 action has been performed.
+## Phase 2 completion — 2026-08-05
 
-## Confirmation gate
+The owner explicitly confirmed all three cleanup points. The database cleanup ran through migration `202608050004_preproduction_demo_cleanup.sql` after a rollback-only validation produced the expected state.
 
-Before Phase 2, confirm all three points explicitly:
+Removed:
 
-1. Delete all 22 audited products, the six exact product-image objects, and the `test1` customer/Auth account.
-2. Delete all eight audited categories after they become unused.
-3. Preserve the voucher and app settings rows exactly as they are.
+- 22 exact audited product UUIDs
+- eight exact audited category UUIDs after they became unused
+- the managed `test1` profile and Auth user
+- all confirmed dependent cart/order/inventory targets (each table was already empty)
+- six exact `product-images` objects through the server-side Storage API
+- legacy browser demo-state source data and stale keys `yt-stationery-demo-v2`, `yt-stationery-auto-backup-v2`, and `yt-cart-v2`
+
+Preserved and verified:
+
+- primary active owner Auth/profile `65f629cb-4f13-482d-86d3-514531333c7f`
+- voucher and app settings, one row each
+- schema, RLS policies, migrations, Storage buckets and configuration
+- deployed `username-login` and `account-admin` Edge Functions
+- product export template, source code, theme preference, and voucher paper preference
+
+Post-cleanup exact counts:
+
+| Data source | Count |
+|---|---:|
+| products | 0 |
+| categories | 0 |
+| inventory movements | 0 |
+| orders | 0 |
+| order items | 0 |
+| cart items | 0 |
+| profiles | 1 (owner) |
+| Auth users | 1 (owner) |
+| product images | 0 |
+| delivery proofs | 0 |
+| voucher settings | 1 |
+| app settings | 1 |
+
+The temporary cleanup secret and temporary Edge Function were removed after the six Storage deletions succeeded. A separate post-cleanup read-only snapshot is stored under `.codex-tmp/pr9-postclean-20260805`.
+
+Automated validations completed: migration sync through `202608050004`, database lint with no schema errors, exact post-cleanup counts, active owner/profile preservation, settings preservation, empty Storage listings, JavaScript syntax, and legacy demo-source removal.
+
+Manual deploy-preview validation still required before merge: owner username/password login, email recovery entry point, empty catalogue, new product CRUD/image upload/initial stock, Excel empty export, unauthorized access denial, and mobile layout.
