@@ -70,6 +70,7 @@ First-version decision:
 - Account list/create, enable/disable and owner-managed password reset use an authenticated owner-only Edge Function.
 - The frontend calls these functions through `account-service.js`, keeping the backend contract in one replaceable service layer.
 - Customer password-change and email-recovery controls are not shown. Only an owner can reset managed customer/staff passwords through the UI.
+- For this test version, owner-managed customer/staff passwords accept any value of at least 6 characters. This is intentionally weaker than the recommended 12-character policy and must be reviewed before production launch.
 - The primary owner keeps the existing real-email recovery flow.
 - This test version does not attempt strict custom authentication that technically prevents a knowledgeable signed-in customer from calling Supabase's password-update API directly. That stronger control is deferred intentionally.
 - Secret/service-role credentials remain only in Supabase Edge Function environment variables and never in frontend code or GitHub.

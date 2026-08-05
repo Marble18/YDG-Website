@@ -62,7 +62,7 @@ Deno.serve(async (request) => {
       if (!validUsername(username)) return json({ ok: false, error: 'Username must be 3–32 lowercase letters, numbers, dot, dash or underscore.' }, 400)
       if (!fullName || fullName.length > 100) return json({ ok: false, error: 'Full name is required and must be under 100 characters.' }, 400)
       if (!role) return json({ ok: false, error: 'Only customer or staff accounts can be created.' }, 400)
-      if (!validPassword(password)) return json({ ok: false, error: 'Password must be at least 12 characters with uppercase, lowercase, number and symbol.' }, 400)
+      if (!validPassword(password)) return json({ ok: false, error: 'Password must be at least 6 characters.' }, 400)
 
       const email = `${username}@accounts.ydg.invalid`
       const { data: created, error: createError } = await admin.auth.admin.createUser({
@@ -109,7 +109,7 @@ Deno.serve(async (request) => {
     }
 
     if (body.action === 'reset-password') {
-      if (!validPassword(body.password)) return json({ ok: false, error: 'Password must be at least 12 characters with uppercase, lowercase, number and symbol.' }, 400)
+      if (!validPassword(body.password)) return json({ ok: false, error: 'Password must be at least 6 characters.' }, 400)
       const { error } = await admin.auth.admin.updateUserById(userId, { password: String(body.password) })
       if (error) throw error
       return json({ ok: true })

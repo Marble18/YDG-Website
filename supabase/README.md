@@ -28,7 +28,7 @@ Deployment status: migration and both functions were deployed on 2026-08-05. The
 
 1. Sign in as the primary owner using username `owner` and the current password.
 2. Confirm email recovery still works only through **Owner password recovery**.
-3. Create a customer with a strong temporary password.
+3. Create a customer with a temporary password of at least 6 characters; use a longer password whenever practical.
 4. Sign out and sign in as that customer using the new username.
 5. Confirm no customer password-change or recovery control is visible.
 6. Sign in as owner and reset the customer password; confirm the old password fails and the new password works.
