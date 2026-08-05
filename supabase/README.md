@@ -24,6 +24,8 @@ The login function intentionally has `verify_jwt = false` because it runs before
 
 ## Post-deploy checks
 
+Deployment status: migration and both functions were deployed on 2026-08-05. The real credential checks below must still be completed before merge.
+
 1. Sign in as the primary owner using username `owner` and the current password.
 2. Confirm email recovery still works only through **Owner password recovery**.
 3. Create a customer with a strong temporary password.
