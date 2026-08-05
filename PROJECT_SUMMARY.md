@@ -32,6 +32,10 @@ Yadanar Theingi Stationery & Fancy အတွက် မြန်မာအသု�
 - Categories, products နှင့် inventory movements ကို Supabase မှ ဖတ်/ရေးသည်။
 - Owner product CRUD, image upload, stock adjustment နှင့် category price adjustment ပါပြီးပြီ။
 - Product images ကို public `product-images` bucket တွင် သိမ်းသည်။
+- Product form supports case-insensitive existing-category autocomplete with keyboard, pointer and touch selection.
+- Category names are trimmed and protected by a case-insensitive database unique index; historical case-only duplicates are consolidated by migration.
+- Product photos support browse and drag/drop with identical JPEG/PNG/WebP, 500 KB, preview and status validation.
+- Products store `unit` (`pcs` or `box`) and a positive whole-number `minimum_order_quantity`; existing rows default to `pcs` and `1`.
 
 ### Database and Storage
 
@@ -133,3 +137,4 @@ First-version decision:
 - 2026-08-05: Chose first-version username login with owner-managed customer/staff passwords, Edge Functions and a replaceable frontend account service layer.
 - 2026-08-05: Applied managed-account RLS migration and deployed both Edge Functions; anonymous login failure and unauthenticated admin denial were verified.
 - 2026-08-05: Completed owner/customer credential, reset and enable/disable end-to-end validation on Netlify deploy preview #5.
+- 2026-08-05: Applied product unit/minimum-order and case-insensitive category-integrity migration for PR #6; product-form UI validation remains pending deploy-preview review.
