@@ -24,7 +24,7 @@ The login function intentionally has `verify_jwt = false` because it runs before
 
 ## Post-deploy checks
 
-Deployment status: migration and both functions were deployed on 2026-08-05. The real credential checks below must still be completed before merge.
+Deployment status: migration and both functions were deployed on 2026-08-05. The credential checks below were completed successfully against Netlify deploy preview #5.
 
 1. Sign in as the primary owner using username `owner` and the current password.
 2. Confirm email recovery still works only through **Owner password recovery**.

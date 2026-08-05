@@ -88,7 +88,7 @@ First-version decision:
 ## 7. Known issues and risks
 
 - Supabase built-in email may return `EMAIL RATE LIMIT EXCEEDED`; production recovery needs custom SMTP.
-- Managed-account migration `202608050001` and Edge Functions `username-login` / `account-admin` were deployed to the linked Supabase project on 2026-08-05. Real owner/customer credential flows still require manual end-to-end validation before merge.
+- Managed-account migration `202608050001` and Edge Functions `username-login` / `account-admin` were deployed to the linked Supabase project on 2026-08-05. Owner username login, customer creation/login, owner-managed password reset, old-password denial, disable denial and re-enable login were manually validated against the deploy preview.
 - Orders, customers, cart, voucher settings and backup flows are not fully migrated from Local Storage.
 - Inventory writes are not yet transactional.
 - README and UI must remain free of usable demo passwords.
@@ -107,11 +107,10 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Complete real owner/customer end-to-end validation for the deployed managed-account flow.
-2. Move cart and order submission to database transactions/RPC.
-3. Complete owner order management and private delivery-proof flow.
-4. Move voucher, app settings and maintenance mode to Supabase.
-5. Add browser/mobile regression checks and production backup procedure.
+1. Move cart and order submission to database transactions/RPC.
+2. Complete owner order management and private delivery-proof flow.
+3. Move voucher, app settings and maintenance mode to Supabase.
+4. Add browser/mobile regression checks and production backup procedure.
 
 ## 10. Validation checklist
 
@@ -133,3 +132,4 @@ First-version decision:
 - 2026-08-04: Added this shared project summary and documented remaining migrations and risks.
 - 2026-08-05: Chose first-version username login with owner-managed customer/staff passwords, Edge Functions and a replaceable frontend account service layer.
 - 2026-08-05: Applied managed-account RLS migration and deployed both Edge Functions; anonymous login failure and unauthenticated admin denial were verified.
+- 2026-08-05: Completed owner/customer credential, reset and enable/disable end-to-end validation on Netlify deploy preview #5.
