@@ -633,7 +633,7 @@
 
   function productsPage() {
     var products = state.products.filter(function (product) { return !product.deleted; });
-    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Upload product photos and change prices for an entire category.</p></div><div class="action-row"><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><div class="panel table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) { return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button><button class="table-action" data-manual-stock="' + product.id + '">Adjust stock</button><button class="table-action delete-action" data-delete-product="' + product.id + '">Delete</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Upload product photos, export Excel lists, and change prices for an entire category.</p></div><div class="action-row"><button class="secondary" id="export-products">Export products</button><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><div class="panel table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) { return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button><button class="table-action" data-manual-stock="' + product.id + '">Adjust stock</button><button class="table-action delete-action" data-delete-product="' + product.id + '">Delete</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
   }
 
   function inventoryPage() {
@@ -670,6 +670,7 @@
     document.querySelectorAll('[data-toggle-account]').forEach(function (button) { button.addEventListener('click', function () { updateAccountAccess(button.dataset.toggleAccount); }); });
     document.querySelectorAll('[data-reset-account]').forEach(function (button) { button.addEventListener('click', function () { renderPasswordResetForm(button.dataset.resetAccount); }); });
     var newProduct = document.getElementById('new-product'); if (newProduct) newProduct.addEventListener('click', function () { renderProductForm(); });
+    var exportProducts = document.getElementById('export-products'); if (exportProducts) exportProducts.addEventListener('click', renderProductExport);
     var adjustCategory = document.getElementById('adjust-category'); if (adjustCategory) adjustCategory.addEventListener('click', renderCategoryAdjust);
     var newStock = document.getElementById('new-stock'); if (newStock) newStock.addEventListener('click', renderStockForm);
     var newCustomer = document.getElementById('new-customer'); if (newCustomer) newCustomer.addEventListener('click', function () { renderAccountForm('customer'); });
@@ -685,6 +686,49 @@
       bindOrderTableActions(results);
     });
     ['voucher-title', 'voucher-color', 'voucher-footer'].forEach(function (id) { var input = document.getElementById(id); if (input) input.addEventListener('input', renderLiveVoucherPreview); });
+  }
+
+  function renderProductExport() {
+    var categoryNames = state.products.map(function (product) { return product.category; }).filter(function (value, index, list) { return list.indexOf(value) === index; }).sort();
+    modal('<form id="product-export-form"><div class="modal-head"><div><p class="eyebrow">Excel export</p><h2>Export products</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Download a new .xlsx file based on the YDG product template. Product photos and units are included.</p><label class="field">Category<select name="category"><option value="All Categories">All Categories</option>' + categoryNames.map(function (category) { return '<option value="' + esc(category) + '">' + esc(category) + '</option>'; }).join('') + '</select></label><fieldset class="export-choice"><legend>Products to include</legend><label><input type="radio" name="activity" value="active" checked> Active products only</label><label><input type="radio" name="activity" value="all"> Include inactive products</label></fieldset><p class="export-status" id="product-export-status" aria-live="polite">Choose the export options, then download the workbook.</p><div class="two-button"><button class="secondary" id="cancel-product-export" type="button">Cancel</button><button class="primary" id="download-product-export" type="submit">Download .xlsx</button></div></form>');
+    document.getElementById('cancel-product-export').addEventListener('click', closeModal);
+    document.getElementById('product-export-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var form = event.currentTarget;
+      var data = new FormData(form);
+      var category = data.get('category');
+      var includeInactive = data.get('activity') === 'all';
+      var products = state.products.filter(function (product) {
+        return (includeInactive || !product.deleted) && (category === 'All Categories' || product.category === category);
+      }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+      var button = document.getElementById('download-product-export');
+      var status = document.getElementById('product-export-status');
+      if (!products.length) {
+        status.className = 'export-status error';
+        status.textContent = 'No products match the selected export options.';
+        return;
+      }
+      button.disabled = true;
+      button.textContent = 'Generating…';
+      status.className = 'export-status loading';
+      try {
+        var result = await window.ProductExportService.exportProducts({
+          products: products,
+          category: category,
+          onStatus: function (message) { status.textContent = message; }
+        });
+        status.className = 'export-status success';
+        status.textContent = result.count + ' product(s) exported successfully. Download started.';
+        button.textContent = 'Download again';
+        toast('Product Excel download started.');
+      } catch (error) {
+        status.className = 'export-status error';
+        status.textContent = error.message || 'The Excel file could not be generated.';
+        button.textContent = 'Try again';
+      } finally {
+        button.disabled = false;
+      }
+    });
   }
 
   function updateStatus(orderId, status) {

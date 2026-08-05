@@ -116,6 +116,14 @@ body.dark-mode {
 .photo-file-status { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
 .photo-file-status.success { color: var(--green); }
 .photo-file-status.error { color: var(--red); }
+.export-choice { display: grid; gap: 10px; margin: 18px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.export-choice legend { padding: 0 6px; font-size: 14px; font-weight: 700; }
+.export-choice label { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 14px; }
+.export-choice input { width: 17px; height: 17px; accent-color: var(--wine); }
+.export-status { min-height: 42px; margin: 16px 0 0; padding: 11px 13px; border-radius: 9px; background: var(--rose); color: var(--muted); font-size: 13px; line-height: 1.45; }
+.export-status.loading { color: var(--amber); }
+.export-status.success { color: var(--green); }
+.export-status.error { color: var(--red); }
 .product-info { padding: 16px; }
 .product-category { color: var(--wine); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
 .product-name { margin: 6px 0; font-weight: 700; }
