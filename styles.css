@@ -126,13 +126,13 @@ body.dark-mode {
 .add-to-cart { flex: 1; }
 .empty { padding: 38px; background: white; border: 1px dashed var(--line); color: var(--muted); text-align: center; border-radius: 14px; grid-column: 1/-1; }
 
-.admin-layout { min-height: calc(100vh - 70px); display: grid; grid-template-columns: 232px 1fr; }
-.sidebar { padding: 25px 14px; background: #fff; border-right: 1px solid var(--line); }
+.admin-layout { min-width: 0; min-height: calc(100vh - 70px); display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+.sidebar { min-width: 0; padding: 25px 14px; background: #fff; border-right: 1px solid var(--line); }
 .admin-brand { padding: 0 11px 22px; font: 700 18px "Playfair Display", serif; }
 .admin-brand span { color: var(--wine); font: 700 11px "DM Sans", sans-serif; text-transform: uppercase; letter-spacing: .1em; display: block; margin-top: 4px; }
 .nav-button { display: flex; gap: 11px; align-items: center; width: 100%; text-align: left; padding: 11px 12px; border: 0; background: transparent; color: var(--muted); border-radius: 9px; font-weight: 600; }
 .nav-button:hover, .nav-button.active { background: var(--rose); color: var(--wine); }
-.admin-content { padding: 36px min(42px, 4vw); max-width: 1420px; width: 100%; }
+.admin-content { min-width: 0; padding: 36px min(42px, 4vw); max-width: 1420px; width: 100%; }
 .page-heading { display: flex; justify-content: space-between; gap: 16px; align-items: end; margin-bottom: 29px; }
 .page-heading p { color: var(--muted); margin: 7px 0 0; }
 .dashboard-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
@@ -299,10 +299,10 @@ body.dark-mode .login-order-note { background: #3b2532; color: #f2d5e2; }
   .qty-input { width: 34px; min-width: 0; padding: 3px; font-size: 11px; }
   .add-to-cart { padding: 7px 4px; font-size: 11px; }
   .admin-layout { grid-template-columns: 1fr; }
-  .sidebar { display: flex; gap: 4px; overflow-x: auto; padding: 10px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .sidebar { display: flex; width: 100%; max-width: 100%; gap: 4px; overflow-x: auto; padding: 10px; border-right: 0; border-bottom: 1px solid var(--line); }
   .admin-brand { display: none; }
   .nav-button { width: auto; white-space: nowrap; }
-  .admin-content { padding: 27px 18px; }
+  .admin-content { max-width: 100%; padding: 27px 18px; }
   .topbar { padding: 0 15px; }
   .topbar .brand-lockup span { display: none; }
   .user-label { display: none; }
@@ -314,5 +314,6 @@ body.dark-mode .login-order-note { background: #3b2532; color: #f2d5e2; }
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .full-field { grid-column: auto; }
   .customer-main { padding: 25px 15px 55px; }
+  .page-heading { align-items: start; flex-direction: column; }
   .customer-hero h1, .page-heading h1 { font-size: 28px; }
 }
