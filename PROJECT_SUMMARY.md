@@ -38,6 +38,9 @@ Yadanar Theingi Stationery & Fancy အတွက် မြန်မာအသု�
 - Products store `unit` (`pcs` or `box`) and a positive whole-number `minimum_order_quantity`; existing rows default to `pcs` and `1`.
 - Owner Products provides template-based `.xlsx` export with category and active/inactive filters, sequential numbering, embedded product photos and a Unit column added after the original template columns.
 - Excel export is generated in the browser from the versioned template asset; the source template is never overwritten and no secret key is involved.
+- Customer Catalogue and Owner Products use database-side category filters, debounced name search, an exact result count and stable `created_at, id` pagination with 20 products per request.
+- Product images use native lazy loading. Catalogue screens include loading skeletons, empty results, retryable errors and Load More states for desktop and mobile.
+- Excel export deliberately uses a separate paged full-result fetch because exporting all matching rows is an explicit owner action; normal catalogue pages never fetch all products.
 
 ### Database and Storage
 
@@ -96,6 +99,7 @@ First-version decision:
 - Supabase built-in email may return `EMAIL RATE LIMIT EXCEEDED`; production recovery needs custom SMTP.
 - Managed-account migration `202608050001` and Edge Functions `username-login` / `account-admin` were deployed to the linked Supabase project on 2026-08-05. Owner username login, customer creation/login, owner-managed password reset, old-password denial, disable denial and re-enable login were manually validated against the deploy preview.
 - Orders, customers, cart, voucher settings and backup flows are not fully migrated from Local Storage.
+- Cart and transactional order migration was moved to PR #9, after the PR #8 catalogue performance work.
 - Inventory writes are not yet transactional.
 - README and UI must remain free of usable demo passwords.
 - Browser JSON export is not a production database backup.
@@ -113,7 +117,7 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Move cart and order submission to database transactions/RPC.
+1. PR #9: move cart and order submission to Supabase database transactions/RPC.
 2. Complete owner order management and private delivery-proof flow.
 3. Move voucher, app settings and maintenance mode to Supabase.
 4. Add browser/mobile regression checks and production backup procedure.
@@ -141,3 +145,4 @@ First-version decision:
 - 2026-08-05: Completed owner/customer credential, reset and enable/disable end-to-end validation on Netlify deploy preview #5.
 - 2026-08-05: Merged PR #6 after product CRUD, image input, category autocomplete, database constraints and mobile layout validation.
 - 2026-08-05: Drafted PR #7 template-based Product Excel export; Unit is appended after Stock, local spreadsheet/runtime samples passed, and deploy-preview empty/success/filter/mobile flows were validated.
+- 2026-08-05: PR #7 was merged. Started PR #8 catalogue performance: 20-row database pagination, database category/search filters, stable ordering, lazy images, complete loading/error/empty/count states, catalogue indexes and protected category-wide price adjustment. Cart/orders remains scheduled for PR #9 after PR #8 approval.

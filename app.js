@@ -7,12 +7,17 @@
   var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_1TYSPsIChtMyo_NjcSHQZg_A7uS0PsX';
   var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
   var accountService = window.createAccountService(supabaseClient);
+  var productCatalogueService = window.createProductCatalogueService(supabaseClient);
   var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
   var currentUser = null;
   var adminPage = 'dashboard';
   var toastTimer = null;
   var customerCategory = 'All';
+  var PAGE_SIZE = 20;
+  var customerCatalogue = { items: [], total: 0, search: '', categoryId: '', loading: false, error: '', requestId: 0 };
+  var ownerCatalogue = { items: [], total: 0, search: '', categoryId: '', visibility: 'all', loading: false, error: '', requestId: 0 };
+  var dashboardLowStock = { items: [], total: 0, loading: false, error: '' };
   var THEME_STORAGE = 'yt-theme-v2';
 
   applyTheme(localStorage.getItem(THEME_STORAGE) || 'light');
@@ -129,6 +134,23 @@
     return state.products.find(function (product) { return String(product.id) === String(id); });
   }
 
+  function mergeProductCache(products) {
+    products.forEach(function (product) {
+      var index = state.products.findIndex(function (entry) { return String(entry.id) === String(product.id); });
+      if (index === -1) state.products.push(product);
+      else state.products[index] = product;
+    });
+  }
+
+  function debounce(callback, wait) {
+    var timer;
+    return function () {
+      var args = arguments;
+      clearTimeout(timer);
+      timer = setTimeout(function () { callback.apply(null, args); }, wait);
+    };
+  }
+
   function applyTheme(theme) {
     document.body.classList.toggle('dark-mode', theme === 'dark');
     localStorage.setItem(THEME_STORAGE, theme);
@@ -146,7 +168,7 @@
   function photoMarkup(product, className) {
     var photo = String(product.photo || '');
     var classes = className ? ' class="' + className + '"' : '';
-    if (photo.indexOf('data:image/') === 0 || photo.indexOf('https://') === 0) return '<img' + classes + ' src="' + esc(photo) + '" alt="' + esc(product.name) + '">';
+    if (photo.indexOf('data:image/') === 0 || photo.indexOf('https://') === 0) return '<img' + classes + ' src="' + esc(photo) + '" alt="' + esc(product.name) + '" loading="lazy" decoding="async">';
     if (className) return '<div' + classes + '><div class="photo-placeholder"><span>Product photo</span><small>Owner will add a photo</small></div></div>';
     return '<div class="photo-placeholder"><span>Product photo</span><small>Owner will add a photo</small></div>';
   }
@@ -249,17 +271,12 @@
   }
 
   async function loadCatalogueData() {
-    var productsResult = await supabaseClient
-      .from('products')
-      .select('id, name, description, price, stock_quantity, unit, minimum_order_quantity, image_url, is_active, category_id, categories(name)')
-      .order('created_at', { ascending: true });
-    if (productsResult.error) throw productsResult.error;
-
-    var categoriesResult = await supabaseClient
+    var categoriesQuery = supabaseClient
       .from('categories')
       .select('id, name, is_active')
-      .eq('is_active', true)
       .order('name', { ascending: true });
+    if (currentUser && currentUser.role === 'customer') categoriesQuery = categoriesQuery.eq('is_active', true);
+    var categoriesResult = await categoriesQuery;
     if (categoriesResult.error) throw categoriesResult.error;
 
     var inventoryResult = await supabaseClient
@@ -269,7 +286,7 @@
       .limit(100);
     if (inventoryResult.error) throw inventoryResult.error;
 
-    state.products = productsResult.data.map(mapDatabaseProduct);
+    state.products = [];
     state.categories = categoriesResult.data;
     state.inventory = inventoryResult.data.map(function (row) {
       return {
@@ -406,37 +423,98 @@
   }
 
   function renderCustomer() {
-    document.getElementById('app').innerHTML = topbar(true) + '<main class="customer-main"><section class="customer-hero"><div><p class="eyebrow">Hello, ' + esc(currentUser.name) + '</p><h1>Order your favourites</h1><p>Choose items, submit your order, and follow the confirmed quantities and shipping status from your customer menu.</p></div><input class="search" id="product-search" placeholder="Search products..."></section><section><div class="section-title"><h2>Our collection</h2><span id="product-count"></span></div><div class="category-filters" id="category-filters"></div><div class="product-grid" id="product-grid"></div></section></main><div id="customer-menu-root"></div><div id="modal-root"></div>';
+    customerCatalogue = { items: [], total: 0, search: '', categoryId: '', loading: false, error: '', requestId: customerCatalogue.requestId + 1 };
+    customerCategory = 'All';
+    document.getElementById('app').innerHTML = topbar(true) + '<main class="customer-main"><section class="customer-hero"><div><p class="eyebrow">Hello, ' + esc(currentUser.name) + '</p><h1>Order your favourites</h1><p>Choose items, submit your order, and follow the confirmed quantities and shipping status from your customer menu.</p></div><label class="catalogue-search"><span class="hidden">Search products</span><input class="search" id="product-search" placeholder="Search products..." autocomplete="off"></label></section><section><div class="section-title"><h2>Our collection</h2><span id="product-count" aria-live="polite"></span></div><div class="category-filters" id="category-filters"></div><div class="product-grid" id="product-grid" aria-busy="true"></div><div class="catalogue-more" id="customer-product-more"></div></section></main><div id="customer-menu-root"></div><div id="modal-root"></div>';
     document.getElementById('open-cart').addEventListener('click', renderCart);
-    document.getElementById('product-search').addEventListener('input', function (event) { renderProducts(event.target.value); });
+    document.getElementById('product-search').addEventListener('input', debounce(function (event) {
+      customerCatalogue.search = event.target.value.trim();
+      loadCustomerProducts(true);
+    }, 350));
     document.getElementById('open-customer-menu').addEventListener('click', renderCustomerMenu);
     renderCategoryFilters();
-    renderProducts('');
+    loadCustomerProducts(true);
   }
 
   function renderCategoryFilters() {
-    var categories = state.products.filter(function (product) { return !product.deleted; }).map(function (product) { return product.category; }).filter(function (category, index, list) { return list.indexOf(category) === index; }).sort();
-    if (categories.indexOf(customerCategory) === -1 && customerCategory !== 'All') customerCategory = 'All';
-    document.getElementById('category-filters').innerHTML = ['All'].concat(categories).map(function (category) {
-      return '<button class="category-filter ' + (customerCategory === category ? 'active' : '') + '" data-category="' + esc(category) + '">' + esc(category) + '</button>';
+    var categories = state.categories.filter(function (category) { return category.is_active; });
+    if (customerCategory !== 'All' && !categories.some(function (category) { return String(category.id) === String(customerCategory); })) customerCategory = 'All';
+    document.getElementById('category-filters').innerHTML = '<button class="category-filter ' + (customerCategory === 'All' ? 'active' : '') + '" data-customer-category="">All</button>' + categories.map(function (category) {
+      return '<button class="category-filter ' + (String(customerCategory) === String(category.id) ? 'active' : '') + '" data-customer-category="' + category.id + '">' + esc(category.name) + '</button>';
     }).join('');
-    document.querySelectorAll('[data-category]').forEach(function (button) {
+    document.querySelectorAll('[data-customer-category]').forEach(function (button) {
       button.addEventListener('click', function () {
-        customerCategory = button.dataset.category;
+        customerCategory = button.dataset.customerCategory || 'All';
+        customerCatalogue.categoryId = button.dataset.customerCategory || '';
         renderCategoryFilters();
-        renderProducts(document.getElementById('product-search').value);
+        loadCustomerProducts(true);
       });
     });
   }
 
-  function renderProducts(query) {
-    var search = String(query || '').toLowerCase();
-    var products = state.products.filter(function (product) { return !product.deleted && (customerCategory === 'All' || product.category === customerCategory) && (product.name.toLowerCase().indexOf(search) > -1 || product.category.toLowerCase().indexOf(search) > -1); });
-    document.getElementById('product-count').textContent = products.length + ' items available';
-    document.getElementById('product-grid').innerHTML = products.length ? products.map(function (product) {
+  function productSkeletons(count) {
+    return Array.from({ length: count }).map(function () { return '<article class="product-card product-skeleton" aria-hidden="true"><div class="skeleton-block skeleton-photo"></div><div class="product-info"><div class="skeleton-block skeleton-line short"></div><div class="skeleton-block skeleton-line"></div><div class="skeleton-block skeleton-line medium"></div></div></article>'; }).join('');
+  }
+
+  async function loadCustomerProducts(reset) {
+    if (customerCatalogue.loading && !reset) return;
+    var requestId = ++customerCatalogue.requestId;
+    if (reset) {
+      customerCatalogue.items = [];
+      customerCatalogue.total = 0;
+      customerCatalogue.error = '';
+    }
+    customerCatalogue.loading = true;
+    renderCustomerProducts();
+    try {
+      var result = await productCatalogueService.list({
+        visibility: 'active',
+        categoryId: customerCatalogue.categoryId,
+        search: customerCatalogue.search,
+        offset: reset ? 0 : customerCatalogue.items.length,
+        limit: PAGE_SIZE
+      });
+      if (requestId !== customerCatalogue.requestId) return;
+      var products = result.rows.map(mapDatabaseProduct);
+      customerCatalogue.items = reset ? products : customerCatalogue.items.concat(products);
+      customerCatalogue.total = result.count;
+      customerCatalogue.error = '';
+      mergeProductCache(products);
+    } catch (error) {
+      if (requestId !== customerCatalogue.requestId) return;
+      customerCatalogue.error = error.message || 'Products could not be loaded.';
+    } finally {
+      if (requestId === customerCatalogue.requestId) {
+        customerCatalogue.loading = false;
+        renderCustomerProducts();
+      }
+    }
+  }
+
+  function renderCustomerProducts() {
+    var grid = document.getElementById('product-grid');
+    var count = document.getElementById('product-count');
+    var more = document.getElementById('customer-product-more');
+    if (!grid || !count || !more) return;
+    count.textContent = customerCatalogue.loading && !customerCatalogue.items.length ? 'Loading products…' : 'Showing ' + customerCatalogue.items.length + ' of ' + customerCatalogue.total + ' product(s)';
+    grid.setAttribute('aria-busy', customerCatalogue.loading ? 'true' : 'false');
+    if (customerCatalogue.loading && !customerCatalogue.items.length) {
+      grid.innerHTML = productSkeletons(6);
+      more.innerHTML = '';
+      return;
+    }
+    if (customerCatalogue.error && !customerCatalogue.items.length) {
+      grid.innerHTML = '<div class="empty catalogue-error"><b>Products could not be loaded.</b><span>' + esc(customerCatalogue.error) + '</span><button class="secondary" id="retry-customer-products">Try again</button></div>';
+      document.getElementById('retry-customer-products').addEventListener('click', function () { loadCustomerProducts(true); });
+      more.innerHTML = '';
+      return;
+    }
+    var products = customerCatalogue.items;
+    grid.innerHTML = products.length ? products.map(function (product) {
       var hasPhoto = /^(data:image\/|https:\/\/)/.test(String(product.photo || ''));
       var photo = hasPhoto ? '<button class="product-photo photo-preview-button" data-preview-photo="' + product.id + '" aria-label="Preview ' + esc(product.name) + '" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</button>' : '<div class="product-photo" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</div>';
-      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + '</span><span>' + (product.stock ? product.stock + ' in stock' : 'Out of stock') + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="1" max="' + product.stock + '" value="1" ' + (product.stock ? '' : 'disabled') + '><button class="primary add-to-cart" data-product="' + product.id + '" ' + (product.stock ? '' : 'disabled') + '>Add</button></div></div></article>';
+      var canOrder = product.stock >= product.minimumOrderQuantity;
+      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + ' / ' + esc(product.unit) + '</span><span>' + (product.stock ? product.stock + ' in stock · min ' + product.minimumOrderQuantity : 'Out of stock') + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="' + product.minimumOrderQuantity + '" max="' + product.stock + '" value="' + product.minimumOrderQuantity + '" ' + (canOrder ? '' : 'disabled') + '><button class="primary add-to-cart" data-product="' + product.id + '" ' + (canOrder ? '' : 'disabled') + '>Add</button></div></div></article>';
     }).join('') : '<div class="empty">No matching products found.</div>';
     document.querySelectorAll('[data-product]').forEach(function (button) {
       button.addEventListener('click', function () { addToCart(Number(button.dataset.product), Number(document.getElementById('qty-' + button.dataset.product).value || 1)); });
@@ -444,11 +522,16 @@
     document.querySelectorAll('[data-preview-photo]').forEach(function (button) {
       button.addEventListener('click', function () { renderPhotoPreview(Number(button.dataset.previewPhoto)); });
     });
+    if (customerCatalogue.error) more.innerHTML = '<div class="inline-error">' + esc(customerCatalogue.error) + ' <button class="text-link" id="retry-customer-more">Retry</button></div>';
+    else if (customerCatalogue.items.length < customerCatalogue.total) more.innerHTML = '<button class="secondary" id="load-more-products" ' + (customerCatalogue.loading ? 'disabled' : '') + '>' + (customerCatalogue.loading ? 'Loading…' : 'Load more products') + '</button>';
+    else more.innerHTML = products.length ? '<span>All matching products are shown.</span>' : '';
+    var retryMore = document.getElementById('retry-customer-more'); if (retryMore) retryMore.addEventListener('click', function () { loadCustomerProducts(false); });
+    var loadMore = document.getElementById('load-more-products'); if (loadMore) loadMore.addEventListener('click', function () { loadCustomerProducts(false); });
   }
 
   function renderPhotoPreview(productId) {
     var product = getProduct(productId);
-    if (!product || String(product.photo || '').indexOf('data:image/') !== 0) return;
+    if (!product || !/^(data:image\/|https:\/\/)/.test(String(product.photo || ''))) return;
     modal('<div class="modal-head"><div><p class="eyebrow">Product photo</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><div class="photo-lightbox"><img src="' + esc(product.photo) + '" alt="' + esc(product.name) + '"></div>');
   }
 
@@ -483,11 +566,12 @@
 
   function addToCart(productId, quantity) {
     var product = getProduct(productId);
-    if (!product || !product.stock) return;
+    if (!product || product.stock < product.minimumOrderQuantity) return;
+    quantity = Math.max(product.minimumOrderQuantity, Math.min(product.stock, Number(quantity) || product.minimumOrderQuantity));
     var items = cart();
     var line = items.find(function (item) { return item.productId === productId; });
     if (line) line.quantity = Math.min(product.stock, line.quantity + quantity);
-    else items.push({ productId: productId, quantity: Math.min(product.stock, quantity) });
+    else items.push({ productId: productId, quantity: quantity });
     setCart(items);
     document.querySelector('.cart-count').textContent = cartCount();
     toast(product.name + ' added to cart.');
@@ -497,15 +581,27 @@
     return cart().map(function (line) { return { product: getProduct(line.productId), quantity: line.quantity }; }).filter(function (line) { return line.product; });
   }
 
-  function renderCart() {
+  async function ensureCachedProducts(ids) {
+    var missing = ids.filter(function (id) { return !getProduct(id); });
+    if (!missing.length) return;
+    var rows = await productCatalogueService.getByIds(missing);
+    mergeProductCache(rows.map(mapDatabaseProduct));
+  }
+
+  async function renderCart() {
+    try {
+      await ensureCachedProducts(cart().map(function (line) { return line.productId; }));
+    } catch (error) {
+      toast(error.message || 'Cart products could not be refreshed.');
+    }
     var items = cartLines();
-    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' each</span></div><input type="number" min="1" max="' + line.product.stock + '" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
+    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' / ' + esc(line.product.unit) + ' · minimum ' + line.product.minimumOrderQuantity + '</span></div><input type="number" min="' + line.product.minimumOrderQuantity + '" max="' + line.product.stock + '" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
     document.querySelectorAll('[data-cart-quantity]').forEach(function (input) {
       input.addEventListener('change', function () {
         var items = cart();
         var item = items.find(function (entry) { return entry.productId === Number(input.dataset.cartQuantity); });
         var product = getProduct(item.productId);
-        item.quantity = Math.max(1, Math.min(product.stock, Number(input.value) || 1));
+        item.quantity = Math.max(product.minimumOrderQuantity, Math.min(product.stock, Number(input.value) || product.minimumOrderQuantity));
         setCart(items);
         renderCart();
       });
@@ -595,8 +691,37 @@
     var pending = state.orders.filter(function (order) { return order.status === 'Pending'; }).length;
     var revenue = state.orders.filter(function (order) { return order.status === 'Delivered'; }).reduce(function (sum, order) { return sum + order.total; }, 0);
     var customers = state.users.filter(function (user) { return user.role === 'customer' && user.status === 'Active'; }).length;
-    var low = state.products.filter(function (product) { return product.stock < 10; }).length;
-    return '<div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Good morning, Owner</h1><p>Review new orders and keep stock ready for shipping.</p></div><button class="primary" data-go="orders">View orders</button></div><section class="dashboard-stats">' + stat('New orders', pending, pending ? 'Needs your review' : 'All caught up') + stat('Delivered revenue', money(revenue), 'Delivered orders') + stat('Active customers', customers, 'Owner-managed accounts') + stat('Low stock items', low, low ? 'Restock soon' : 'Stock levels are good') + '</section><section class="admin-grid"><div class="panel"><h2 class="panel-title">Recent orders <button class="text-link" data-go="orders">View all</button></h2>' + adminOrderTable(state.orders.slice().sort(function (a, b) { return b.id - a.id; }).slice(0, 5), false) + '</div><div class="panel"><h2 class="panel-title">Low stock</h2>' + stockList(state.products.filter(function (product) { return product.stock < 10; })) + '</div></section>';
+    return '<div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Good morning, Owner</h1><p>Review new orders and keep stock ready for shipping.</p></div><button class="primary" data-go="orders">View orders</button></div><section class="dashboard-stats">' + stat('New orders', pending, pending ? 'Needs your review' : 'All caught up') + stat('Delivered revenue', money(revenue), 'Delivered orders') + stat('Active customers', customers, 'Owner-managed accounts') + '<article class="stat-card"><div class="stat-label">Low stock items</div><div class="stat-value" id="low-stock-count">...</div><div class="stat-change" id="low-stock-note">Checking stock levels</div></article></section><section class="admin-grid"><div class="panel"><h2 class="panel-title">Recent orders <button class="text-link" data-go="orders">View all</button></h2>' + adminOrderTable(state.orders.slice().sort(function (a, b) { return b.id - a.id; }).slice(0, 5), false) + '</div><div class="panel"><h2 class="panel-title">Low stock</h2><div id="dashboard-low-stock" aria-busy="true">' + productSkeletons(3) + '</div></div></section>';
+  }
+
+  async function loadDashboardLowStock() {
+    var target = document.getElementById('dashboard-low-stock');
+    if (!target) return;
+    dashboardLowStock.loading = true;
+    try {
+      var result = await supabaseClient.from('products').select('id, name, stock_quantity, category_id, categories(name)', { count: 'exact' }).eq('is_active', true).lt('stock_quantity', 10).order('stock_quantity', { ascending: true }).order('id', { ascending: true }).limit(10);
+      if (result.error) throw result.error;
+      dashboardLowStock.items = (result.data || []).map(mapDatabaseProduct);
+      dashboardLowStock.total = Number(result.count) || 0;
+      dashboardLowStock.error = '';
+      target.innerHTML = stockList(dashboardLowStock.items);
+      target.setAttribute('aria-busy', 'false');
+      var count = document.getElementById('low-stock-count');
+      var note = document.getElementById('low-stock-note');
+      if (count) count.textContent = dashboardLowStock.total;
+      if (note) note.textContent = dashboardLowStock.total ? 'Restock soon' : 'Stock levels are good';
+    } catch (error) {
+      dashboardLowStock.error = error.message || 'Stock levels could not be loaded.';
+      target.setAttribute('aria-busy', 'false');
+      target.innerHTML = '<div class="inline-error">' + esc(dashboardLowStock.error) + ' <button class="text-link" id="retry-low-stock">Retry</button></div>';
+      document.getElementById('retry-low-stock').addEventListener('click', loadDashboardLowStock);
+      var failedCount = document.getElementById('low-stock-count');
+      var failedNote = document.getElementById('low-stock-note');
+      if (failedCount) failedCount.textContent = '-';
+      if (failedNote) failedNote.textContent = 'Could not load stock';
+    } finally {
+      dashboardLowStock.loading = false;
+    }
   }
 
   function stat(label, value, note) {
@@ -632,8 +757,82 @@
   }
 
   function productsPage() {
-    var products = state.products.filter(function (product) { return !product.deleted; });
-    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Upload product photos, export Excel lists, and change prices for an entire category.</p></div><div class="action-row"><button class="secondary" id="export-products">Export products</button><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><div class="panel table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) { return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button><button class="table-action" data-manual-stock="' + product.id + '">Adjust stock</button><button class="table-action delete-action" data-delete-product="' + product.id + '">Delete</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
+    var categoryOptions = state.categories.map(function (category) { return '<option value="' + category.id + '" ' + (String(ownerCatalogue.categoryId) === String(category.id) ? 'selected' : '') + '>' + esc(category.name) + '</option>'; }).join('');
+    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Search and manage the catalogue without loading every product at once.</p></div><div class="action-row"><button class="secondary" id="export-products">Export products</button><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><section class="panel catalogue-toolbar"><label class="field">Search products<input id="owner-product-search" value="' + esc(ownerCatalogue.search) + '" placeholder="Product name..." autocomplete="off"></label><label class="field">Category<select id="owner-product-category"><option value="">All Categories</option>' + categoryOptions + '</select></label><label class="field">Status<select id="owner-product-status"><option value="all" ' + (ownerCatalogue.visibility === 'all' ? 'selected' : '') + '>Active and inactive</option><option value="active" ' + (ownerCatalogue.visibility === 'active' ? 'selected' : '') + '>Active only</option><option value="inactive" ' + (ownerCatalogue.visibility === 'inactive' ? 'selected' : '') + '>Inactive only</option></select></label></section><div class="catalogue-result-heading"><span id="owner-product-count" aria-live="polite"></span></div><div class="panel table-wrap" id="owner-product-results" aria-busy="true"></div><div class="catalogue-more" id="owner-product-more"></div>';
+  }
+
+  async function loadOwnerProducts(reset) {
+    if (ownerCatalogue.loading && !reset) return;
+    var requestId = ++ownerCatalogue.requestId;
+    if (reset) {
+      ownerCatalogue.items = [];
+      ownerCatalogue.total = 0;
+      ownerCatalogue.error = '';
+    }
+    ownerCatalogue.loading = true;
+    renderOwnerProducts();
+    try {
+      var result = await productCatalogueService.list({
+        visibility: ownerCatalogue.visibility,
+        categoryId: ownerCatalogue.categoryId,
+        search: ownerCatalogue.search,
+        offset: reset ? 0 : ownerCatalogue.items.length,
+        limit: PAGE_SIZE
+      });
+      if (requestId !== ownerCatalogue.requestId) return;
+      var products = result.rows.map(mapDatabaseProduct);
+      ownerCatalogue.items = reset ? products : ownerCatalogue.items.concat(products);
+      ownerCatalogue.total = result.count;
+      ownerCatalogue.error = '';
+      mergeProductCache(products);
+    } catch (error) {
+      if (requestId !== ownerCatalogue.requestId) return;
+      ownerCatalogue.error = error.message || 'Products could not be loaded.';
+    } finally {
+      if (requestId === ownerCatalogue.requestId) {
+        ownerCatalogue.loading = false;
+        renderOwnerProducts();
+      }
+    }
+  }
+
+  function renderOwnerProducts() {
+    var results = document.getElementById('owner-product-results');
+    var count = document.getElementById('owner-product-count');
+    var more = document.getElementById('owner-product-more');
+    if (!results || !count || !more) return;
+    count.textContent = ownerCatalogue.loading && !ownerCatalogue.items.length ? 'Loading products…' : 'Showing ' + ownerCatalogue.items.length + ' of ' + ownerCatalogue.total + ' product(s)';
+    results.setAttribute('aria-busy', ownerCatalogue.loading ? 'true' : 'false');
+    if (ownerCatalogue.loading && !ownerCatalogue.items.length) {
+      results.innerHTML = '<div class="table-skeleton">' + Array.from({ length: 6 }).map(function () { return '<div class="skeleton-row"><span></span><span></span><span></span><span></span></div>'; }).join('') + '</div>';
+      more.innerHTML = '';
+      return;
+    }
+    if (ownerCatalogue.error && !ownerCatalogue.items.length) {
+      results.innerHTML = '<div class="empty catalogue-error"><b>Products could not be loaded.</b><span>' + esc(ownerCatalogue.error) + '</span><button class="secondary" id="retry-owner-products">Try again</button></div>';
+      document.getElementById('retry-owner-products').addEventListener('click', function () { loadOwnerProducts(true); });
+      more.innerHTML = '';
+      return;
+    }
+    var products = ownerCatalogue.items;
+    results.innerHTML = products.length ? '<table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) {
+      var status = product.deleted ? '<span class="badge disabled">Inactive</span>' : '<span class="badge active">Active</span>';
+      var availabilityAction = product.deleted ? '<button class="table-action" data-reactivate-product="' + product.id + '">Reactivate</button>' : '<button class="table-action delete-action" data-delete-product="' + product.id + '">Deactivate</button>';
+      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button><button class="table-action" data-manual-stock="' + product.id + '">Adjust stock</button>' + availabilityAction + '</div></td></tr>';
+    }).join('') + '</tbody></table>' : '<div class="empty">No matching products found.</div>';
+    bindProductTableActions(results);
+    if (ownerCatalogue.error) more.innerHTML = '<div class="inline-error">' + esc(ownerCatalogue.error) + ' <button class="text-link" id="retry-owner-more">Retry</button></div>';
+    else if (ownerCatalogue.items.length < ownerCatalogue.total) more.innerHTML = '<button class="secondary" id="load-more-owner-products" ' + (ownerCatalogue.loading ? 'disabled' : '') + '>' + (ownerCatalogue.loading ? 'Loading…' : 'Load more products') + '</button>';
+    else more.innerHTML = products.length ? '<span>All matching products are shown.</span>' : '';
+    var retryMore = document.getElementById('retry-owner-more'); if (retryMore) retryMore.addEventListener('click', function () { loadOwnerProducts(false); });
+    var loadMore = document.getElementById('load-more-owner-products'); if (loadMore) loadMore.addEventListener('click', function () { loadOwnerProducts(false); });
+  }
+
+  function bindProductTableActions(root) {
+    root.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(button.dataset.editProduct); }); });
+    root.querySelectorAll('[data-manual-stock]').forEach(function (button) { button.addEventListener('click', function () { renderManualStockAdjust(button.dataset.manualStock); }); });
+    root.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(button.dataset.deleteProduct); }); });
+    root.querySelectorAll('[data-reactivate-product]').forEach(function (button) { button.addEventListener('click', function () { reactivateProduct(button.dataset.reactivateProduct); }); });
   }
 
   function inventoryPage() {
@@ -664,14 +863,11 @@
   function bindAdmin() {
     document.querySelectorAll('[data-go]').forEach(function (button) { button.addEventListener('click', function () { adminPage = button.dataset.go; renderAdminPage(); }); });
     bindOrderTableActions(document);
-    document.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(button.dataset.editProduct); }); });
-    document.querySelectorAll('[data-manual-stock]').forEach(function (button) { button.addEventListener('click', function () { renderManualStockAdjust(button.dataset.manualStock); }); });
-    document.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(button.dataset.deleteProduct); }); });
     document.querySelectorAll('[data-toggle-account]').forEach(function (button) { button.addEventListener('click', function () { updateAccountAccess(button.dataset.toggleAccount); }); });
     document.querySelectorAll('[data-reset-account]').forEach(function (button) { button.addEventListener('click', function () { renderPasswordResetForm(button.dataset.resetAccount); }); });
     var newProduct = document.getElementById('new-product'); if (newProduct) newProduct.addEventListener('click', function () { renderProductForm(); });
-    var exportProducts = document.getElementById('export-products'); if (exportProducts) exportProducts.addEventListener('click', renderProductExport);
-    var adjustCategory = document.getElementById('adjust-category'); if (adjustCategory) adjustCategory.addEventListener('click', renderCategoryAdjust);
+    var exportProducts = document.getElementById('export-products'); if (exportProducts) exportProducts.addEventListener('click', renderDatabaseProductExport);
+    var adjustCategory = document.getElementById('adjust-category'); if (adjustCategory) adjustCategory.addEventListener('click', renderDatabaseCategoryAdjust);
     var newStock = document.getElementById('new-stock'); if (newStock) newStock.addEventListener('click', renderStockForm);
     var newCustomer = document.getElementById('new-customer'); if (newCustomer) newCustomer.addEventListener('click', function () { renderAccountForm('customer'); });
     var newOwner = document.getElementById('new-owner'); if (newOwner) newOwner.addEventListener('click', function () { renderAccountForm('staff'); });
@@ -679,6 +875,16 @@
     var voucherSettings = document.getElementById('voucher-settings'); if (voucherSettings) voucherSettings.addEventListener('submit', saveVoucherSettings);
     var download = document.getElementById('download-backup'); if (download) download.addEventListener('click', downloadBackup);
     var restore = document.getElementById('restore-backup'); if (restore) restore.addEventListener('change', restoreBackup);
+    var ownerProductSearch = document.getElementById('owner-product-search');
+    var ownerProductCategory = document.getElementById('owner-product-category');
+    var ownerProductStatus = document.getElementById('owner-product-status');
+    if (ownerProductSearch && ownerProductCategory && ownerProductStatus) {
+      ownerProductSearch.addEventListener('input', debounce(function (event) { ownerCatalogue.search = event.target.value.trim(); loadOwnerProducts(true); }, 350));
+      ownerProductCategory.addEventListener('change', function () { ownerCatalogue.categoryId = ownerProductCategory.value; loadOwnerProducts(true); });
+      ownerProductStatus.addEventListener('change', function () { ownerCatalogue.visibility = ownerProductStatus.value; loadOwnerProducts(true); });
+      loadOwnerProducts(true);
+    }
+    if (document.getElementById('dashboard-low-stock')) loadDashboardLowStock();
     var ownerOrderSearch = document.getElementById('owner-order-search');
     if (ownerOrderSearch) ownerOrderSearch.addEventListener('input', function () {
       var results = document.getElementById('owner-order-results');
@@ -689,7 +895,7 @@
   }
 
   function renderProductExport() {
-    var categoryNames = state.products.map(function (product) { return product.category; }).filter(function (value, index, list) { return list.indexOf(value) === index; }).sort();
+    var categoryNames = state.categories.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
     modal('<form id="product-export-form"><div class="modal-head"><div><p class="eyebrow">Excel export</p><h2>Export products</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Download a new .xlsx file based on the YDG product template. Product photos and units are included.</p><label class="field">Category<select name="category"><option value="All Categories">All Categories</option>' + categoryNames.map(function (category) { return '<option value="' + esc(category) + '">' + esc(category) + '</option>'; }).join('') + '</select></label><fieldset class="export-choice"><legend>Products to include</legend><label><input type="radio" name="activity" value="active" checked> Active products only</label><label><input type="radio" name="activity" value="all"> Include inactive products</label></fieldset><p class="export-status" id="product-export-status" aria-live="polite">Choose the export options, then download the workbook.</p><div class="two-button"><button class="secondary" id="cancel-product-export" type="button">Cancel</button><button class="primary" id="download-product-export" type="submit">Download .xlsx</button></div></form>');
     document.getElementById('cancel-product-export').addEventListener('click', closeModal);
     document.getElementById('product-export-form').addEventListener('submit', async function (event) {
@@ -1006,7 +1212,7 @@
           photoStatus.classList.remove('success', 'error');
           photo = await uploadProductImage(productIdValue, selectedPhotoFile);
         }
-        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: photo || null, is_active: true };
+        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: photo || null, is_active: product ? !product.deleted : true };
         var result = product
           ? await supabaseClient.from('products').update(values).eq('id', product.id)
           : await supabaseClient.from('products').insert(values);
@@ -1063,6 +1269,58 @@
     });
   }
 
+  function renderDatabaseProductExport() {
+    var categories = state.categories.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
+    modal('<form id="product-export-form"><div class="modal-head"><div><p class="eyebrow">Excel export</p><h2>Export products</h2></div><button class="icon-btn" id="close-modal" type="button">x</button></div><p class="subtext">Download a new .xlsx file based on the YDG product template. Product photos and units are included.</p><label class="field">Category<select name="category"><option value="">All Categories</option>' + categories.map(function (category) { return '<option value="' + category.id + '">' + esc(category.name) + '</option>'; }).join('') + '</select></label><fieldset class="export-choice"><legend>Products to include</legend><label><input type="radio" name="activity" value="active" checked> Active products only</label><label><input type="radio" name="activity" value="all"> Include inactive products</label></fieldset><p class="export-status" id="product-export-status" aria-live="polite">Choose the export options, then download the workbook.</p><div class="two-button"><button class="secondary" id="cancel-product-export" type="button">Cancel</button><button class="primary" id="download-product-export" type="submit">Download .xlsx</button></div></form>');
+    document.getElementById('cancel-product-export').addEventListener('click', closeModal);
+    document.getElementById('product-export-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var data = new FormData(event.currentTarget);
+      var categoryId = data.get('category');
+      var category = categories.find(function (entry) { return String(entry.id) === String(categoryId); });
+      var includeInactive = data.get('activity') === 'all';
+      var button = document.getElementById('download-product-export');
+      var status = document.getElementById('product-export-status');
+      button.disabled = true;
+      button.textContent = 'Generating...';
+      status.className = 'export-status loading';
+      status.textContent = 'Loading matching products from the database...';
+      try {
+        var rows = await productCatalogueService.listAll({ visibility: includeInactive ? 'all' : 'active', categoryId: categoryId });
+        var products = rows.map(mapDatabaseProduct);
+        if (!products.length) {
+          status.className = 'export-status error';
+          status.textContent = 'No products match the selected export options.';
+          button.textContent = 'Try again';
+          return;
+        }
+        var result = await window.ProductExportService.exportProducts({
+          products: products,
+          category: category ? category.name : 'All Categories',
+          onStatus: function (message) { status.textContent = message; }
+        });
+        status.className = 'export-status success';
+        status.textContent = result.count + ' product(s) exported successfully. Download started.';
+        button.textContent = 'Download again';
+        toast('Product Excel download started.');
+      } catch (error) {
+        status.className = 'export-status error';
+        status.textContent = error.message || 'The Excel file could not be generated.';
+        button.textContent = 'Try again';
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
+  async function reactivateProduct(productId) {
+    var product = getProduct(productId);
+    if (!product || !product.deleted) return;
+    var result = await supabaseClient.from('products').update({ is_active: true }).eq('id', product.id);
+    if (result.error) return toast(result.error.message || 'The product could not be reactivated.');
+    await refreshCataloguePage(product.name + ' is active again.');
+  }
+
   function renderCategoryAdjust() {
     var categories = state.products.filter(function (product) { return !product.deleted; }).map(function (product) { return product.category; }).filter(function (value, index, list) { return list.indexOf(value) === index; }).sort();
     modal('<form id="category-form"><div class="modal-head"><div><p class="eyebrow">Pricing tool</p><h2>Adjust category prices</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Increase or reduce every product in one category at the same time.</p><label class="field">Category<select name="category">' + categories.map(function (category) { return '<option value="' + esc(category) + '">' + esc(category) + '</option>'; }).join('') + '</select></label><label class="field">Percentage change<input name="percentage" type="number" min="-100" step="0.01" required placeholder="Example: 10 or -5"></label><p class="photo-help">10 increases by 10%. -5 reduces by 5%. Prices are rounded to the nearest 50 MMK.</p><div class="two-button"><button class="primary" type="submit">Apply price change</button></div></form>');
@@ -1079,6 +1337,30 @@
         }));
         await refreshCataloguePage(changed.length + ' product price(s) updated.');
       } catch (error) { toast(error.message || 'Category prices could not be updated.'); }
+    });
+  }
+
+  function renderDatabaseCategoryAdjust() {
+    var categories = state.categories.filter(function (category) { return category.is_active !== false; }).slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
+    modal('<form id="category-form"><div class="modal-head"><div><p class="eyebrow">Pricing tool</p><h2>Adjust category prices</h2></div><button class="icon-btn" id="close-modal" type="button">x</button></div><p class="subtext">Update every active product in one category with one protected database operation.</p><label class="field">Category<select name="categoryId" required>' + categories.map(function (category) { return '<option value="' + category.id + '">' + esc(category.name) + '</option>'; }).join('') + '</select></label><label class="field">Percentage change<input name="percentage" type="number" min="-100" max="10000" step="0.01" required placeholder="Example: 10 or -5"></label><p class="photo-help">10 increases by 10%. -5 reduces by 5%. Prices are rounded to the nearest 50 MMK.</p><p class="export-status" id="category-adjust-status" aria-live="polite"></p><div class="two-button"><button class="primary" id="apply-category-adjust" type="submit">Apply price change</button></div></form>');
+    document.getElementById('category-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var data = new FormData(event.currentTarget);
+      var percentage = Number(data.get('percentage'));
+      if (!Number.isFinite(percentage) || percentage < -100 || percentage > 10000) return toast('Enter a valid percentage from -100 to 10000.');
+      var button = document.getElementById('apply-category-adjust');
+      var status = document.getElementById('category-adjust-status');
+      button.disabled = true;
+      status.textContent = 'Updating category prices...';
+      try {
+        var result = await supabaseClient.rpc('adjust_product_category_prices', { p_category_id: data.get('categoryId'), p_percentage: percentage });
+        if (result.error) throw result.error;
+        await refreshCataloguePage(Number(result.data || 0) + ' product price(s) updated.');
+      } catch (error) {
+        button.disabled = false;
+        status.className = 'export-status error';
+        status.textContent = error.message || 'Category prices could not be updated.';
+      }
     });
   }
 
