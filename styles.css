@@ -105,6 +105,17 @@ body.dark-mode {
 .photo-upload-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .photo-upload-preview .photo-placeholder { color: var(--muted); }
 .photo-help { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 0; }
+.category-combobox { position: relative; }
+.category-suggestions { position: absolute; z-index: 6; top: calc(100% - 10px); left: 0; right: 0; max-height: 210px; overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--cream); box-shadow: var(--shadow); }
+.category-suggestions button { display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); text-align: left; }
+.category-suggestions button:hover, .category-suggestions button.active { color: white; background: var(--wine); }
+.photo-drop-zone { display: grid; place-items: center; gap: 7px; padding: 18px; border: 2px dashed #d7b6c1; border-radius: 11px; background: var(--cream); color: var(--muted); text-align: center; transition: border-color .2s ease, background .2s ease; }
+.photo-drop-zone:hover, .photo-drop-zone:focus, .photo-drop-zone.drag-active { border-color: var(--wine); background: var(--rose); outline: none; }
+.photo-drop-zone span { font-size: 13px; }
+.photo-drop-zone small { font-size: 11px; }
+.photo-file-status { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+.photo-file-status.success { color: var(--green); }
+.photo-file-status.error { color: var(--red); }
 .product-info { padding: 16px; }
 .product-category { color: var(--wine); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
 .product-name { margin: 6px 0; font-weight: 700; }

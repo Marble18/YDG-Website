@@ -67,6 +67,11 @@
     data.settings.voucher.title = data.settings.voucher.title || defaults.voucher.title;
     data.settings.voucher.footer = data.settings.voucher.footer || defaults.voucher.footer;
     data.settings.voucher.accentColor = data.settings.voucher.accentColor || defaults.voucher.accentColor;
+    data.categories = data.categories || [];
+    data.products.forEach(function (product) {
+      product.unit = product.unit === 'box' ? 'box' : 'pcs';
+      product.minimumOrderQuantity = Number.isInteger(product.minimumOrderQuantity) && product.minimumOrderQuantity > 0 ? product.minimumOrderQuantity : 1;
+    });
     data.users.forEach(function (user) { delete user.password; });
     data.orders.forEach(function (order) {
       if (order.status === 'Confirmed') order.status = 'Approved';
@@ -235,6 +240,8 @@
       categoryId: row.category_id,
       price: Number(row.price),
       stock: Number(row.stock_quantity),
+      unit: row.unit === 'box' ? 'box' : 'pcs',
+      minimumOrderQuantity: Number(row.minimum_order_quantity) || 1,
       photo: row.image_url || '',
       bg: '#f3e8ec',
       deleted: !row.is_active
@@ -244,9 +251,16 @@
   async function loadCatalogueData() {
     var productsResult = await supabaseClient
       .from('products')
-      .select('id, name, description, price, stock_quantity, image_url, is_active, category_id, categories(name)')
+      .select('id, name, description, price, stock_quantity, unit, minimum_order_quantity, image_url, is_active, category_id, categories(name)')
       .order('created_at', { ascending: true });
     if (productsResult.error) throw productsResult.error;
+
+    var categoriesResult = await supabaseClient
+      .from('categories')
+      .select('id, name, is_active')
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+    if (categoriesResult.error) throw categoriesResult.error;
 
     var inventoryResult = await supabaseClient
       .from('inventory_movements')
@@ -256,6 +270,7 @@
     if (inventoryResult.error) throw inventoryResult.error;
 
     state.products = productsResult.data.map(mapDatabaseProduct);
+    state.categories = categoriesResult.data;
     state.inventory = inventoryResult.data.map(function (row) {
       return {
         id: row.id,
@@ -271,12 +286,25 @@
 
   async function findOrCreateCategory(name) {
     var categoryName = String(name).trim();
-    var existing = await supabaseClient.from('categories').select('id, name').ilike('name', categoryName).maybeSingle();
-    if (existing.error) throw existing.error;
-    if (existing.data) return existing.data;
+    if (!categoryName) throw new Error('Category is required.');
+    var existing = state.categories.find(function (category) { return category.name.toLowerCase() === categoryName.toLowerCase(); });
+    if (existing) return existing;
 
     var created = await supabaseClient.from('categories').insert({ name: categoryName, is_active: true }).select('id, name').single();
+    if (created.error && created.error.code === '23505') {
+      var retry = await supabaseClient.from('categories').select('id, name, is_active');
+      var match = retry.data && retry.data.find(function (category) { return category.name.toLowerCase() === categoryName.toLowerCase(); });
+      if (retry.error || !match) throw created.error;
+      if (!match.is_active) {
+        var reactivated = await supabaseClient.from('categories').update({ is_active: true }).eq('id', match.id).select('id, name').single();
+        if (reactivated.error) throw reactivated.error;
+        match = reactivated.data;
+      }
+      state.categories.push(match);
+      return match;
+    }
     if (created.error) throw created.error;
+    state.categories.push(created.data);
     return created.data;
   }
 
@@ -605,7 +633,7 @@
 
   function productsPage() {
     var products = state.products.filter(function (product) { return !product.deleted; });
-    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Upload product photos and change prices for an entire category.</p></div><div class="action-row"><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><div class="panel table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) { return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button><button class="table-action" data-manual-stock="' + product.id + '">Adjust stock</button><button class="table-action delete-action" data-delete-product="' + product.id + '">Delete</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Upload product photos and change prices for an entire category.</p></div><div class="action-row"><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><div class="panel table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) { return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button><button class="table-action" data-manual-stock="' + product.id + '">Adjust stock</button><button class="table-action delete-action" data-delete-product="' + product.id + '">Delete</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
   }
 
   function inventoryPage() {
@@ -806,30 +834,135 @@
 
   function renderProductForm(productId) {
     var product = productId ? getProduct(productId) : null;
-    modal('<form id="product-form"><div class="modal-head"><div><p class="eyebrow">Catalogue</p><h2>' + (product ? 'Edit product' : 'Add product') + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="form-grid"><label class="field full-field">Product name<input name="name" required value="' + (product ? esc(product.name) : '') + '"></label><label class="field">Category<input name="category" required value="' + (product ? esc(product.category) : '') + '"></label><label class="field">Price (MMK)<input name="price" type="number" min="0" required value="' + (product ? product.price : '') + '"></label><label class="field">Current stock<input name="stock" type="number" min="0" step="1" required value="' + (product ? product.stock : '') + '"></label><label class="field full-field">Product photo<input id="product-photo" type="file" accept="image/jpeg,image/png,image/webp"></label><p class="photo-help full-field">JPEG, PNG or WebP. Maximum file size: 500 KB.</p><div class="photo-upload-preview full-field" id="product-preview">' + photoMarkup(product || { name: 'New product', photo: '' }) + '</div></div><div class="two-button"><button class="primary" type="submit">Save product</button></div></form>');
-    document.getElementById('product-photo').addEventListener('change', function (event) {
-      var file = event.target.files[0];
-      if (!file) return;
-      if (file.size > 500000) { event.target.value = ''; return toast('Choose a product photo smaller than 500 KB.'); }
-      imageToDataUrl(file).then(function (src) { document.getElementById('product-preview').innerHTML = '<img src="' + esc(src) + '" alt="Product preview">'; });
+    var categoryNames = state.categories.map(function (category) { return category.name; });
+    var selectedPhotoFile = null;
+    modal('<form id="product-form"><div class="modal-head"><div><p class="eyebrow">Catalogue</p><h2>' + (product ? 'Edit product' : 'Add product') + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="form-grid"><label class="field full-field">Product name<input name="name" required value="' + (product ? esc(product.name) : '') + '"></label><div class="field category-combobox"><label for="product-category">Category</label><input id="product-category" name="category" role="combobox" aria-autocomplete="list" aria-controls="category-suggestions" aria-expanded="false" required autocomplete="off" value="' + (product ? esc(product.category) : '') + '"><div class="category-suggestions" id="category-suggestions" role="listbox" hidden></div></div><label class="field">Price (MMK)<input name="price" type="number" min="0" required value="' + (product ? product.price : '') + '"></label><label class="field">Current stock<input name="stock" type="number" min="0" step="1" required value="' + (product ? product.stock : '') + '"></label><label class="field">Unit<select name="unit" required><option value="pcs" ' + (!product || product.unit === 'pcs' ? 'selected' : '') + '>pcs</option><option value="box" ' + (product && product.unit === 'box' ? 'selected' : '') + '>box</option></select></label><label class="field">Minimum order quantity<input name="minimumOrderQuantity" type="number" min="1" step="1" required value="' + (product ? product.minimumOrderQuantity : 1) + '"></label><div class="field full-field"><span>Product photo</span><div class="photo-drop-zone" id="product-photo-drop" role="button" tabindex="0" aria-label="Browse or drop a product photo"><input id="product-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden><button class="secondary" id="browse-product-photo" type="button">Browse image</button><span>or drag and drop here</span><small>JPEG, PNG or WebP · Maximum 500 KB</small></div><p class="photo-file-status" id="product-photo-status" aria-live="polite">' + (product && product.photo ? 'Current photo will be kept unless a new image is selected.' : 'No image selected.') + '</p></div><div class="photo-upload-preview full-field" id="product-preview">' + photoMarkup(product || { name: 'New product', photo: '' }) + '</div></div><div class="two-button"><button class="primary" type="submit">Save product</button></div></form>');
+
+    var categoryInput = document.getElementById('product-category');
+    var categoryList = document.getElementById('category-suggestions');
+    var categoryMatches = [];
+    var highlightedCategory = -1;
+
+    function closeCategorySuggestions() {
+      categoryList.hidden = true;
+      categoryList.innerHTML = '';
+      categoryInput.setAttribute('aria-expanded', 'false');
+      categoryInput.removeAttribute('aria-activedescendant');
+      highlightedCategory = -1;
+    }
+
+    function highlightCategory(index) {
+      highlightedCategory = index;
+      categoryList.querySelectorAll('[role="option"]').forEach(function (option, optionIndex) {
+        option.classList.toggle('active', optionIndex === index);
+        option.setAttribute('aria-selected', optionIndex === index ? 'true' : 'false');
+      });
+      if (index >= 0) categoryInput.setAttribute('aria-activedescendant', 'category-option-' + index);
+    }
+
+    function showCategorySuggestions() {
+      var query = categoryInput.value.trim().toLowerCase();
+      if (!query) return closeCategorySuggestions();
+      categoryMatches = categoryNames.filter(function (name) { return name.toLowerCase().indexOf(query) !== -1; }).slice(0, 8);
+      if (!categoryMatches.length) return closeCategorySuggestions();
+      categoryList.innerHTML = categoryMatches.map(function (name, index) { return '<button id="category-option-' + index + '" type="button" role="option" aria-selected="false" data-category-index="' + index + '">' + esc(name) + '</button>'; }).join('');
+      categoryList.hidden = false;
+      categoryInput.setAttribute('aria-expanded', 'true');
+      highlightedCategory = -1;
+    }
+
+    function chooseCategory(index) {
+      if (!categoryMatches[index]) return;
+      categoryInput.value = categoryMatches[index];
+      closeCategorySuggestions();
+      categoryInput.focus();
+    }
+
+    categoryInput.addEventListener('input', showCategorySuggestions);
+    categoryInput.addEventListener('focus', showCategorySuggestions);
+    categoryInput.addEventListener('blur', function () { setTimeout(closeCategorySuggestions, 120); });
+    categoryInput.addEventListener('keydown', function (event) {
+      if (categoryList.hidden && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) showCategorySuggestions();
+      if (categoryList.hidden) return;
+      if (event.key === 'ArrowDown') { event.preventDefault(); highlightCategory((highlightedCategory + 1) % categoryMatches.length); }
+      if (event.key === 'ArrowUp') { event.preventDefault(); highlightCategory((highlightedCategory - 1 + categoryMatches.length) % categoryMatches.length); }
+      if (event.key === 'Enter' && highlightedCategory >= 0) { event.preventDefault(); chooseCategory(highlightedCategory); }
+      if (event.key === 'Escape') { event.preventDefault(); closeCategorySuggestions(); }
     });
+    categoryList.addEventListener('pointerdown', function (event) {
+      var option = event.target.closest('[data-category-index]');
+      if (!option) return;
+      event.preventDefault();
+      chooseCategory(Number(option.dataset.categoryIndex));
+    });
+
+    var photoInput = document.getElementById('product-photo');
+    var photoDrop = document.getElementById('product-photo-drop');
+    var photoStatus = document.getElementById('product-photo-status');
+
+    async function selectProductPhoto(file) {
+      var allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+      photoStatus.classList.remove('error', 'success');
+      if (!file || allowedTypes.indexOf(file.type) === -1) {
+        selectedPhotoFile = null;
+        photoInput.value = '';
+        photoStatus.textContent = 'Choose a JPEG, PNG or WebP image.';
+        photoStatus.classList.add('error');
+        return toast('Choose a JPEG, PNG or WebP image.');
+      }
+      if (file.size > 500000) {
+        selectedPhotoFile = null;
+        photoInput.value = '';
+        photoStatus.textContent = 'Image is larger than the 500 KB limit.';
+        photoStatus.classList.add('error');
+        return toast('Choose a product photo no larger than 500 KB.');
+      }
+      selectedPhotoFile = file;
+      photoStatus.textContent = file.name + ' is ready to upload.';
+      photoStatus.classList.add('success');
+      try {
+        var src = await imageToDataUrl(file);
+        document.getElementById('product-preview').innerHTML = '<img src="' + esc(src) + '" alt="Product preview">';
+      } catch (error) {
+        selectedPhotoFile = null;
+        photoStatus.textContent = 'The image preview could not be loaded.';
+        photoStatus.classList.remove('success');
+        photoStatus.classList.add('error');
+        toast('The image preview could not be loaded.');
+      }
+    }
+
+    document.getElementById('browse-product-photo').addEventListener('click', function () { photoInput.click(); });
+    photoDrop.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); photoInput.click(); }
+    });
+    photoInput.addEventListener('change', function () { if (photoInput.files[0]) selectProductPhoto(photoInput.files[0]); });
+    ['dragenter', 'dragover'].forEach(function (name) { photoDrop.addEventListener(name, function (event) { event.preventDefault(); photoDrop.classList.add('drag-active'); }); });
+    ['dragleave', 'drop'].forEach(function (name) { photoDrop.addEventListener(name, function (event) { event.preventDefault(); photoDrop.classList.remove('drag-active'); }); });
+    photoDrop.addEventListener('drop', function (event) { if (event.dataTransfer.files[0]) selectProductPhoto(event.dataTransfer.files[0]); });
+
     document.getElementById('product-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
       var price = Number(data.get('price'));
       var stock = Number(data.get('stock'));
+      var minimumOrderQuantity = Number(data.get('minimumOrderQuantity'));
       if (!Number.isFinite(price) || price < 0) return toast('Enter a valid product price.');
       if (!Number.isInteger(stock) || stock < 0) return toast('Enter a whole stock quantity of 0 or more.');
+      if (!Number.isInteger(minimumOrderQuantity) || minimumOrderQuantity < 1) return toast('Minimum order quantity must be a positive whole number.');
       var productIdValue = product ? product.id : crypto.randomUUID();
       var photo = product ? product.photo : '';
-      var file = document.getElementById('product-photo').files[0];
       var submitButton = event.target.querySelector('button[type="submit"]');
       submitButton.disabled = true;
       submitButton.textContent = 'Saving…';
       try {
         var category = await findOrCreateCategory(data.get('category'));
-        if (file) photo = await uploadProductImage(productIdValue, file);
-        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, image_url: photo || null, is_active: true };
+        if (selectedPhotoFile) {
+          photoStatus.textContent = 'Uploading image…';
+          photoStatus.classList.remove('success', 'error');
+          photo = await uploadProductImage(productIdValue, selectedPhotoFile);
+        }
+        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: photo || null, is_active: true };
         var result = product
           ? await supabaseClient.from('products').update(values).eq('id', product.id)
           : await supabaseClient.from('products').insert(values);
