@@ -6,6 +6,7 @@
   var SUPABASE_URL = 'https://tfvwfpvdqcbgqnijhhpd.supabase.co';
   var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_1TYSPsIChtMyo_NjcSHQZg_A7uS0PsX';
   var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  var accountService = window.createAccountService(supabaseClient);
   var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
   var currentUser = null;
@@ -212,6 +213,20 @@
     return profileToCurrentUser(result.data, authUser.email || '');
   }
 
+  async function loadManagedAccounts() {
+    var response = await accountService.list();
+    state.users = response.accounts.map(function (account) {
+      return {
+        id: account.id,
+        username: account.username,
+        name: account.fullName,
+        role: account.role,
+        status: account.isActive ? 'Active' : 'Disabled',
+        created: new Date(account.createdAt).toLocaleDateString('en-GB')
+      };
+    });
+  }
+
   function mapDatabaseProduct(row) {
     return {
       id: row.id,
@@ -281,7 +296,7 @@
   }
 
   function renderLogin() {
-    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Secure owner portal</p><h2>Welcome back</h2><p class="subtext">Sign in with the owner email and password registered in Supabase.</p><label class="field">Email<input name="email" type="email" required autocomplete="email"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><button class="text-link full" id="forgot-password" type="button">Forgot password?</button><div class="login-order-note"><b>Note</b><br>Order တင်လိုပါက Viber Number 09780000146 သို့ အရင် ဆက်သွယ်ပေးပါ။</div></form></div></section>';
+    document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-shell"><div class="brand-panel"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><h1>Everything lovely for your desk.</h1><p>Order stationery and fancy items easily from your approved customer account.</p><p class="login-note">' + (state.settings.maintenanceMode ? 'Under Maintenance — customer ordering is temporarily unavailable.' : 'Customer accounts are created and managed exclusively by the shop owner.') + '</p></div><form class="login-card" id="login-form"><p class="eyebrow">Secure account access</p><h2>Welcome back</h2><p class="subtext">Sign in with the username and password provided by the shop owner.</p><label class="field">Username<input name="username" required minlength="3" maxlength="32" autocapitalize="none" spellcheck="false" autocomplete="username"></label><label class="field">Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary full" type="submit">Sign in</button><button class="text-link full" id="forgot-password" type="button">Owner password recovery</button><div class="login-order-note"><b>Note</b><br>Order တင်လိုပါက Viber Number 09780000146 သို့ အရင် ဆက်သွယ်ပေးပါ။</div></form></div></section>';
     document.getElementById('forgot-password').addEventListener('click', renderForgotPassword);
     document.getElementById('login-form').addEventListener('submit', async function (event) {
       event.preventDefault();
@@ -291,22 +306,22 @@
       button.textContent = 'Signing in…';
 
       try {
-        var authResult = await supabaseClient.auth.signInWithPassword({
-          email: String(data.get('email')).trim(),
-          password: String(data.get('password'))
-        });
-        if (authResult.error) throw authResult.error;
-
-        currentUser = await loadAuthenticatedUser(authResult.data.user);
-        if (currentUser.role !== 'owner' && currentUser.role !== 'staff') {
+        var session = await accountService.login(String(data.get('username')).trim(), String(data.get('password')));
+        currentUser = await loadAuthenticatedUser(session.user);
+        if (currentUser.role === 'customer' && state.settings.maintenanceMode) {
           await supabaseClient.auth.signOut();
           currentUser = null;
-          throw new Error('Customer login will be enabled in the next setup stage.');
+          throw new Error('Customer ordering is temporarily under maintenance.');
         }
         await loadCatalogueData();
-        renderAdmin();
+        if (currentUser.role === 'owner' || currentUser.role === 'staff') {
+          if (currentUser.role === 'owner') await loadManagedAccounts();
+          renderAdmin();
+        } else {
+          renderCustomer();
+        }
       } catch (error) {
-        toast(error.message === 'Invalid login credentials' ? 'Email or password is incorrect.' : error.message);
+        toast(error.message || 'Username or password is incorrect.');
         button.disabled = false;
         button.textContent = 'Sign in';
       }
@@ -533,7 +548,8 @@
   }
 
   function renderAdmin() {
-    document.getElementById('app').innerHTML = topbar(false) + '<div class="admin-layout"><aside class="sidebar"><div class="admin-brand">Yadanar Theingi<span>Owner dashboard</span></div><button class="nav-button" data-page="dashboard">Dashboard</button><button class="nav-button" data-page="orders">Orders</button><button class="nav-button" data-page="products">Products</button><button class="nav-button" data-page="inventory">Inventory</button><button class="nav-button" data-page="customers">Customers</button><button class="nav-button" data-page="owners">Owner accounts</button><button class="nav-button" data-page="settings">Settings</button></aside><main class="admin-content" id="admin-content"></main></div><div id="modal-root"></div>';
+    var accountNavigation = currentUser.role === 'owner' ? '<button class="nav-button" data-page="customers">Customers</button><button class="nav-button" data-page="owners">Owner accounts</button>' : '';
+    document.getElementById('app').innerHTML = topbar(false) + '<div class="admin-layout"><aside class="sidebar"><div class="admin-brand">Yadanar Theingi<span>Owner dashboard</span></div><button class="nav-button" data-page="dashboard">Dashboard</button><button class="nav-button" data-page="orders">Orders</button><button class="nav-button" data-page="products">Products</button><button class="nav-button" data-page="inventory">Inventory</button>' + accountNavigation + '<button class="nav-button" data-page="settings">Settings</button></aside><main class="admin-content" id="admin-content"></main></div><div id="modal-root"></div>';
     document.getElementById('logout').addEventListener('click', logout);
     document.querySelectorAll('[data-page]').forEach(function (button) { button.addEventListener('click', function () { adminPage = button.dataset.page; renderAdminPage(); }); });
     renderAdminPage();
@@ -602,12 +618,12 @@
 
   function customersPage() {
     var customers = state.users.filter(function (user) { return user.role === 'customer'; });
-    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Customer accounts</h1><p>Create ordering accounts and choose who can access the customer portal.</p></div><button class="primary" id="new-customer">+ Create customer account</button></div><div class="panel table-wrap"><table><thead><tr><th>Customer</th><th>Username</th><th>Orders</th><th>Access</th><th>Action</th></tr></thead><tbody>' + customers.map(function (customer) { return '<tr><td><b>' + esc(customer.name) + '</b></td><td>' + esc(customer.username) + '</td><td>' + state.orders.filter(function (order) { return order.customerId === customer.id; }).length + '</td><td>' + badge(customer.status) + '</td><td><button class="table-action" data-toggle-customer="' + customer.id + '">' + (customer.status === 'Active' ? 'Disable' : 'Enable') + '</button></td></tr>'; }).join('') + '</tbody></table></div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Customer accounts</h1><p>Create accounts, control access and reset customer passwords.</p></div><button class="primary" id="new-customer">+ Create customer account</button></div><div class="panel table-wrap"><table><thead><tr><th>Customer</th><th>Username</th><th>Orders</th><th>Access</th><th>Action</th></tr></thead><tbody>' + customers.map(function (customer) { return '<tr><td><b>' + esc(customer.name) + '</b></td><td>' + esc(customer.username) + '</td><td>' + state.orders.filter(function (order) { return String(order.customerId) === String(customer.id); }).length + '</td><td>' + badge(customer.status) + '</td><td><div class="action-row"><button class="table-action" data-toggle-account="' + customer.id + '">' + (customer.status === 'Active' ? 'Disable' : 'Enable') + '</button><button class="table-action" data-reset-account="' + customer.id + '">Reset password</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
   }
 
   function ownersPage() {
-    var owners = state.users.filter(function (user) { return user.role === 'owner'; });
-    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Owner accounts</h1><p>Create additional owner accounts for trusted staff who manage the whole system.</p></div><button class="primary" id="new-owner">+ Create owner account</button></div><div class="panel table-wrap"><table><thead><tr><th>Owner</th><th>Username</th><th>Created</th><th>Access</th></tr></thead><tbody>' + owners.map(function (owner) { return '<tr><td><b>' + esc(owner.name) + '</b></td><td>' + esc(owner.username) + '</td><td>' + owner.created + '</td><td>' + badge(owner.status) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    var owners = state.users.filter(function (user) { return user.role === 'owner' || user.role === 'staff'; });
+    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Owner accounts</h1><p>The primary owner keeps email recovery. Additional staff use owner-managed username accounts.</p></div><button class="primary" id="new-owner">+ Create staff account</button></div><div class="panel table-wrap"><table><thead><tr><th>Owner / staff</th><th>Username</th><th>Created</th><th>Access</th><th>Action</th></tr></thead><tbody>' + owners.map(function (owner) { var managed = owner.role === 'staff'; return '<tr><td><b>' + esc(owner.name) + '</b><br><small>' + (managed ? 'Managed staff' : 'Primary owner') + '</small></td><td>' + esc(owner.username) + '</td><td>' + owner.created + '</td><td>' + badge(owner.status) + '</td><td>' + (managed ? '<div class="action-row"><button class="table-action" data-toggle-account="' + owner.id + '">' + (owner.status === 'Active' ? 'Disable' : 'Enable') + '</button><button class="table-action" data-reset-account="' + owner.id + '">Reset password</button></div>' : '<small>Uses email recovery</small>') + '</td></tr>'; }).join('') + '</tbody></table></div>';
   }
 
   function settingsPage() {
@@ -623,12 +639,13 @@
     document.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(button.dataset.editProduct); }); });
     document.querySelectorAll('[data-manual-stock]').forEach(function (button) { button.addEventListener('click', function () { renderManualStockAdjust(button.dataset.manualStock); }); });
     document.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(button.dataset.deleteProduct); }); });
-    document.querySelectorAll('[data-toggle-customer]').forEach(function (button) { button.addEventListener('click', function () { var user = state.users.find(function (entry) { return entry.id === Number(button.dataset.toggleCustomer); }); user.status = user.status === 'Active' ? 'Disabled' : 'Active'; saveState(); renderAdminPage(); toast('Customer access updated.'); }); });
+    document.querySelectorAll('[data-toggle-account]').forEach(function (button) { button.addEventListener('click', function () { updateAccountAccess(button.dataset.toggleAccount); }); });
+    document.querySelectorAll('[data-reset-account]').forEach(function (button) { button.addEventListener('click', function () { renderPasswordResetForm(button.dataset.resetAccount); }); });
     var newProduct = document.getElementById('new-product'); if (newProduct) newProduct.addEventListener('click', function () { renderProductForm(); });
     var adjustCategory = document.getElementById('adjust-category'); if (adjustCategory) adjustCategory.addEventListener('click', renderCategoryAdjust);
     var newStock = document.getElementById('new-stock'); if (newStock) newStock.addEventListener('click', renderStockForm);
     var newCustomer = document.getElementById('new-customer'); if (newCustomer) newCustomer.addEventListener('click', function () { renderAccountForm('customer'); });
-    var newOwner = document.getElementById('new-owner'); if (newOwner) newOwner.addEventListener('click', function () { renderAccountForm('owner'); });
+    var newOwner = document.getElementById('new-owner'); if (newOwner) newOwner.addEventListener('click', function () { renderAccountForm('staff'); });
     var siteSettings = document.getElementById('site-settings'); if (siteSettings) siteSettings.addEventListener('submit', saveSiteSettings);
     var voucherSettings = document.getElementById('voucher-settings'); if (voucherSettings) voucherSettings.addEventListener('submit', saveVoucherSettings);
     var download = document.getElementById('download-backup'); if (download) download.addEventListener('click', downloadBackup);
@@ -917,9 +934,61 @@
   }
 
   function renderAccountForm(role) {
-    var label = role === 'owner' ? 'Owner' : 'Customer';
-    modal('<div><div class="modal-head"><div><p class="eyebrow">Secure access control</p><h2>' + label + ' account setup</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Account creation is temporarily unavailable while secure username accounts are moved to Supabase. No password will be stored in this browser.</p><div class="two-button"><button class="primary" id="close-account-notice" type="button">Close</button></div></div>');
-    document.getElementById('close-account-notice').addEventListener('click', closeModal);
+    var label = role === 'staff' ? 'Staff' : 'Customer';
+    modal('<form id="account-form"><div class="modal-head"><div><p class="eyebrow">Secure access control</p><h2>Create ' + label.toLowerCase() + ' account</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Share the username and temporary password securely. The password is sent directly to the protected server function and is never saved in this browser.</p><div class="form-grid"><label class="field full-field">Full name<input name="fullName" required maxlength="100" autocomplete="off"></label><label class="field">Username<input name="username" required minlength="3" maxlength="32" pattern="[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]" autocapitalize="none" spellcheck="false" autocomplete="off"></label><label class="field">Temporary password<input name="password" type="password" required minlength="6" autocomplete="new-password"></label><label class="field full-field">Confirm password<input name="confirmPassword" type="password" required minlength="6" autocomplete="new-password"></label></div><p class="photo-help">Minimum 6 characters. Longer passwords are safer.</p><div class="two-button"><button class="primary" type="submit">Create account</button></div></form>');
+    document.getElementById('account-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var data = new FormData(event.target);
+      if (data.get('password') !== data.get('confirmPassword')) return toast('The passwords do not match.');
+      var button = event.target.querySelector('button[type="submit"]');
+      button.disabled = true;
+      button.textContent = 'Creating…';
+      try {
+        await accountService.create({ role: role, fullName: data.get('fullName'), username: data.get('username'), password: data.get('password') });
+        await loadManagedAccounts();
+        closeModal();
+        renderAdminPage();
+        toast(label + ' account created.');
+      } catch (error) {
+        toast(error.message || 'Account could not be created.');
+        button.disabled = false;
+        button.textContent = 'Create account';
+      }
+    });
+  }
+
+  async function updateAccountAccess(userId) {
+    var account = state.users.find(function (entry) { return String(entry.id) === String(userId); });
+    if (!account) return;
+    try {
+      await accountService.setActive(account.id, account.status !== 'Active');
+      await loadManagedAccounts();
+      renderAdminPage();
+      toast('Account access updated.');
+    } catch (error) { toast(error.message || 'Account access could not be updated.'); }
+  }
+
+  function renderPasswordResetForm(userId) {
+    var account = state.users.find(function (entry) { return String(entry.id) === String(userId); });
+    if (!account) return;
+    modal('<form id="managed-password-form"><div class="modal-head"><div><p class="eyebrow">Owner-managed reset</p><h2>Reset ' + esc(account.username) + ' password</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">The customer or staff member cannot recover this password by email. Give the new password to them securely.</p><label class="field">New password<input name="password" type="password" required minlength="6" autocomplete="new-password"></label><label class="field">Confirm password<input name="confirmPassword" type="password" required minlength="6" autocomplete="new-password"></label><p class="photo-help">Minimum 6 characters. Longer passwords are safer.</p><div class="two-button"><button class="primary" type="submit">Reset password</button></div></form>');
+    document.getElementById('managed-password-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var data = new FormData(event.target);
+      if (data.get('password') !== data.get('confirmPassword')) return toast('The passwords do not match.');
+      var button = event.target.querySelector('button[type="submit"]');
+      button.disabled = true;
+      button.textContent = 'Resetting…';
+      try {
+        await accountService.resetPassword(account.id, data.get('password'));
+        closeModal();
+        toast('Password reset completed.');
+      } catch (error) {
+        toast(error.message || 'Password could not be reset.');
+        button.disabled = false;
+        button.textContent = 'Reset password';
+      }
+    });
   }
 
   function saveSiteSettings(event) {
@@ -1038,11 +1107,15 @@
       currentUser = await loadAuthenticatedUser(session.user);
       if (currentUser.role === 'owner' || currentUser.role === 'staff') {
         await loadCatalogueData();
+        if (currentUser.role === 'owner') await loadManagedAccounts();
         return renderAdmin();
       }
-      await supabaseClient.auth.signOut();
-      currentUser = null;
-      renderLogin();
+      if (currentUser.role === 'customer') {
+        if (state.settings.maintenanceMode) throw new Error('Customer ordering is temporarily under maintenance.');
+        await loadCatalogueData();
+        return renderCustomer();
+      }
+      throw new Error('This account does not have access to the application.');
     } catch (error) {
       await supabaseClient.auth.signOut();
       currentUser = null;
