@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var PRODUCT_COLUMNS = 'id, name, description, price, stock_quantity, unit, minimum_order_quantity, image_url, is_active, category_id, created_at, categories(name)';
+  var PRODUCT_COLUMNS = 'id, name, description, price, stock_quantity, unit, minimum_order_quantity, image_url, is_active, category_id, created_at, updated_at, categories(name)';
 
   function escapeLike(value) {
     return String(value || '').trim().replace(/[\\%_]/g, function (character) { return '\\' + character; });

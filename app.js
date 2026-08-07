@@ -330,6 +330,7 @@
       unit: row.unit === 'box' ? 'box' : 'pcs',
       minimumOrderQuantity: Number(row.minimum_order_quantity) || 1,
       photo: row.image_url || '',
+      updatedAt: row.updated_at || null,
       bg: '#f3e8ec',
       deleted: !row.is_active
     };
@@ -894,7 +895,7 @@
     results.innerHTML = products.length ? '<table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) {
       var status = product.deleted ? '<span class="badge disabled">Inactive</span>' : '<span class="badge active">Active</span>';
       var availabilityAction = product.deleted ? '<button class="table-action" data-reactivate-product="' + product.id + '">Reactivate</button>' : '<button class="table-action delete-action" data-delete-product="' + product.id + '">Deactivate</button>';
-      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button><button class="table-action" data-manual-stock="' + product.id + '">Adjust stock</button>' + availabilityAction + '</div></td></tr>';
+      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button>' + availabilityAction + '</div></td></tr>';
     }).join('') + '</tbody></table>' : '<div class="empty">No matching products found.</div>';
     bindProductTableActions(results);
     if (ownerCatalogue.error) more.innerHTML = '<div class="inline-error">' + esc(ownerCatalogue.error) + ' <button class="text-link" id="retry-owner-more">Retry</button></div>';
@@ -906,7 +907,6 @@
 
   function bindProductTableActions(root) {
     root.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(button.dataset.editProduct); }); });
-    root.querySelectorAll('[data-manual-stock]').forEach(function (button) { button.addEventListener('click', function () { renderManualStockAdjust(button.dataset.manualStock); }); });
     root.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(button.dataset.deleteProduct); }); });
     root.querySelectorAll('[data-reactivate-product]').forEach(function (button) { button.addEventListener('click', function () { reactivateProduct(button.dataset.reactivateProduct); }); });
   }
@@ -1340,7 +1340,18 @@
         }
         var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: photo || null, is_active: product ? !product.deleted : true };
         var result = product
-          ? await supabaseClient.from('products').update(values).eq('id', product.id)
+          ? await supabaseClient.rpc('update_product_with_stock', {
+            p_product_id: product.id,
+            p_expected_updated_at: product.updatedAt,
+            p_name: values.name,
+            p_category_id: values.category_id,
+            p_price: values.price,
+            p_stock_quantity: values.stock_quantity,
+            p_unit: values.unit,
+            p_minimum_order_quantity: values.minimum_order_quantity,
+            p_image_url: values.image_url,
+            p_is_active: values.is_active
+          })
           : await supabaseClient.from('products').insert(values);
         if (result.error) throw result.error;
         await refreshCataloguePage('Product saved to the database.');
@@ -1349,36 +1360,6 @@
         submitButton.disabled = false;
         submitButton.textContent = 'Save product';
       }
-    });
-  }
-
-  function renderManualStockAdjust(productId) {
-    var product = getProduct(productId);
-    if (!product || product.deleted) return;
-    modal('<form id="manual-stock-form"><div class="modal-head"><div><p class="eyebrow">Manual stock adjustment</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Set the exact current stock quantity. The system will automatically add an IN or OUT inventory record for the difference.</p><div class="form-grid"><label class="field">Current stock<input value="' + product.stock + '" disabled></label><label class="field">New stock quantity<input name="newStock" type="number" min="0" step="1" required value="' + product.stock + '"></label><label class="field full-field">Adjustment note<input name="note" placeholder="Stock count, damaged items, correction..."></label></div><div class="two-button"><button class="primary" type="submit">Save stock adjustment</button></div></form>');
-    document.getElementById('manual-stock-form').addEventListener('submit', async function (event) {
-      event.preventDefault();
-      var data = new FormData(event.target);
-      var newStock = Number(data.get('newStock'));
-      if (!Number.isInteger(newStock) || newStock < 0) return toast('Enter a whole stock quantity of 0 or more.');
-      var difference = newStock - product.stock;
-      try {
-        var update = await supabaseClient.from('products').update({ stock_quantity: newStock }).eq('id', product.id);
-        if (update.error) throw update.error;
-        if (difference !== 0) {
-          var movement = await supabaseClient.from('inventory_movements').insert({
-            product_id: product.id,
-            movement_type: 'adjustment',
-            quantity: Math.abs(difference),
-            previous_stock: product.stock,
-            resulting_stock: newStock,
-            note: data.get('note') || 'Manual stock adjustment',
-            created_by: currentUser.id
-          });
-          if (movement.error) throw movement.error;
-        }
-        await refreshCataloguePage('Stock updated to ' + newStock + '.');
-      } catch (error) { toast(error.message || 'Stock could not be updated.'); }
     });
   }
 
