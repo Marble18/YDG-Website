@@ -39,10 +39,16 @@
         if (result.error) throw result.error;
         return result.data || [];
       },
-      updateStatus: async function (orderId, status) {
-        var result = await client.from('orders').update({ status: status }).eq('id', orderId).select('id').single();
-        if (result.error) throw result.error;
-        return result.data;
+      listOwnerOrders: function (options) {
+        return rpc('list_owner_orders', {
+          p_group: options.group,
+          p_search: options.search || '',
+          p_offset: options.offset || 0,
+          p_limit: options.limit || 20
+        });
+      },
+      updateStatus: function (orderId, status) {
+        return rpc('update_order_status', { p_order_id: orderId, p_new_status: status });
       },
       confirmItem: function (orderItemId, confirmedQuantity, confirmedUnitPrice) {
         return rpc('confirm_order_item', {

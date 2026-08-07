@@ -22,6 +22,7 @@
   var PAGE_SIZE = 20;
   var customerCatalogue = { items: [], total: 0, search: '', categoryId: '', loading: false, error: '', requestId: 0 };
   var ownerCatalogue = { items: [], total: 0, search: '', categoryId: '', visibility: 'all', loading: false, error: '', requestId: 0 };
+  var ownerOrders = { items: [], total: 0, group: 'active', search: '', counts: { all: 0, pending: 0, active: 0, ready: 0, delivered: 0 }, customerCounts: {}, recent: [], deliveredRevenue: 0, loading: false, error: '', requestId: 0 };
   var dashboardLowStock = { items: [], total: 0, loading: false, error: '' };
   var remoteCart = [];
   var checkoutKey = null;
@@ -257,7 +258,7 @@
 
   function mapDatabaseOrder(row) {
     return {
-      id: row.id, orderNumber: row.order_number, customerId: row.customer_id,
+      id: row.id, orderNumber: row.order_number || 'Order', customerId: row.customer_id,
       customer: row.profiles ? (row.profiles.full_name || row.profiles.username) : 'Customer',
       items: (row.order_items || []).map(function (item) { return {
         id: item.id, productId: item.product_id, productName: item.product_name, unit: item.unit,
@@ -275,7 +276,40 @@
   }
 
   async function loadRemoteOrders() {
+    if (currentUser && (currentUser.role === 'owner' || currentUser.role === 'staff')) return loadOwnerOrders(true);
     state.orders = (await orderService.listOrders()).map(mapDatabaseOrder);
+  }
+
+  async function loadOwnerOrders(reset) {
+    if (ownerOrders.loading && !reset) return;
+    var requestId = ++ownerOrders.requestId;
+    if (reset) { ownerOrders.items = []; ownerOrders.total = 0; ownerOrders.error = ''; }
+    ownerOrders.loading = true;
+    renderOwnerOrderResults();
+    try {
+      var result = await orderService.listOwnerOrders({
+        group: ownerOrders.group, search: ownerOrders.search,
+        offset: reset ? 0 : ownerOrders.items.length, limit: PAGE_SIZE
+      });
+      if (requestId !== ownerOrders.requestId) return;
+      var mapped = (result.rows || []).map(mapDatabaseOrder);
+      ownerOrders.items = reset ? mapped : ownerOrders.items.concat(mapped);
+      ownerOrders.total = Number(result.count) || 0;
+      ownerOrders.counts = Object.assign({ all: 0, pending: 0, active: 0, ready: 0, delivered: 0 }, result.counts || {});
+      ownerOrders.customerCounts = result.customer_order_counts || {};
+      ownerOrders.recent = (result.recent_rows || []).map(mapDatabaseOrder);
+      ownerOrders.deliveredRevenue = Number(result.delivered_revenue) || 0;
+      ownerOrders.error = '';
+      state.orders = ownerOrders.items;
+    } catch (error) {
+      if (requestId !== ownerOrders.requestId) return;
+      ownerOrders.error = error.message || 'Orders could not be loaded.';
+    } finally {
+      if (requestId === ownerOrders.requestId) {
+        ownerOrders.loading = false;
+        renderOwnerOrderResults();
+      }
+    }
   }
 
   function topbar(hasCart) {
@@ -628,8 +662,8 @@
 
   function renderRecentOrderResults(query) {
     var search = String(query || '').toLowerCase().replace('#', '');
-    var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id && String(order.orderNumber || order.id).toLowerCase().indexOf(search) > -1; });
-    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">' + esc(order.orderNumber || order.id) + '</td><td>' + order.date + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
+    var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id && String(order.orderNumber || '').toLowerCase().indexOf(search) > -1; });
+    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">' + esc(order.orderNumber || 'Order') + '</td><td>' + order.date + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
     document.querySelectorAll('[data-menu-order-details]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(button.dataset.menuOrderDetails); }); });
     document.querySelectorAll('[data-menu-order-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.menuOrderVoucher); }); });
   }
@@ -727,7 +761,7 @@
 
   function renderCustomerOrders() {
     var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id; }).sort(function (a, b) { return b.id - a.id; });
-    document.getElementById('customer-orders').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">' + esc(order.orderNumber || order.id) + '</td><td>' + order.date + '</td><td>' + orderCount(order) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-view-order="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-customer-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">You have not placed an order yet.</div>';
+    document.getElementById('customer-orders').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">' + esc(order.orderNumber || 'Order') + '</td><td>' + order.date + '</td><td>' + orderCount(order) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-view-order="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-customer-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">You have not placed an order yet.</div>';
     document.querySelectorAll('[data-view-order]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(button.dataset.viewOrder); }); });
     document.querySelectorAll('[data-customer-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.customerVoucher); }); });
   }
@@ -743,7 +777,7 @@
       var product = getProduct(item.productId);
       return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
+    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
     var viewVoucher = document.getElementById('view-voucher');
     if (viewVoucher) viewVoucher.addEventListener('click', function () { renderVoucher(order.id); });
   }
@@ -765,10 +799,10 @@
   }
 
   function dashboardPage() {
-    var pending = state.orders.filter(function (order) { return order.status === 'Pending'; }).length;
-    var revenue = state.orders.filter(function (order) { return order.status === 'Delivered'; }).reduce(function (sum, order) { return sum + visibleOrderTotal(order); }, 0);
+    var pending = Number(ownerOrders.counts.pending) || 0;
+    var revenue = ownerOrders.deliveredRevenue;
     var customers = state.users.filter(function (user) { return user.role === 'customer' && user.status === 'Active'; }).length;
-    return '<div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Good morning, Owner</h1><p>Review new orders and keep stock ready for shipping.</p></div><button class="primary" data-go="orders">View orders</button></div><section class="dashboard-stats">' + stat('New orders', pending, pending ? 'Needs your review' : 'All caught up') + stat('Delivered revenue', money(revenue), 'Delivered orders') + stat('Active customers', customers, 'Owner-managed accounts') + '<article class="stat-card"><div class="stat-label">Low stock items</div><div class="stat-value" id="low-stock-count">...</div><div class="stat-change" id="low-stock-note">Checking stock levels</div></article></section><section class="admin-grid"><div class="panel"><h2 class="panel-title">Recent orders <button class="text-link" data-go="orders">View all</button></h2>' + adminOrderTable(state.orders.slice().sort(function (a, b) { return b.id - a.id; }).slice(0, 5), false) + '</div><div class="panel"><h2 class="panel-title">Low stock</h2><div id="dashboard-low-stock" aria-busy="true">' + productSkeletons(3) + '</div></div></section>';
+    return '<div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Good morning, Owner</h1><p>Review new orders and keep stock ready for shipping.</p></div><button class="primary" data-go="orders">View orders</button></div><section class="dashboard-stats">' + stat('New orders', pending, pending ? 'Needs your review' : 'All caught up') + stat('Delivered revenue', money(revenue), 'Delivered orders') + stat('Active customers', customers, 'Owner-managed accounts') + '<article class="stat-card"><div class="stat-label">Low stock items</div><div class="stat-value" id="low-stock-count">...</div><div class="stat-change" id="low-stock-note">Checking stock levels</div></article></section><section class="admin-grid"><div class="panel"><h2 class="panel-title">Recent orders <button class="text-link" data-go="orders">View all</button></h2>' + adminOrderTable(ownerOrders.recent, false) + '</div><div class="panel"><h2 class="panel-title">Low stock</h2><div id="dashboard-low-stock" aria-busy="true">' + productSkeletons(3) + '</div></div></section>';
   }
 
   async function loadDashboardLowStock() {
@@ -806,24 +840,50 @@
   }
 
   function ordersPage() {
-    return '<div class="page-heading"><div><p class="eyebrow">Order management</p><h1>Orders</h1><p>Review requested quantities and move orders through delivery.</p></div></div><div class="panel owner-search-panel"><input class="search" id="owner-order-search" placeholder="Search Order ID or customer name..."></div><div class="panel table-wrap" id="owner-order-results">' + adminOrderTable(state.orders, true) + '</div>';
+    var groups = [
+      { id: 'active', label: 'Active Orders' }, { id: 'ready', label: 'Ready to Ship' },
+      { id: 'delivered', label: 'Delivered' }, { id: 'all', label: 'All Orders' }
+    ];
+    var tabs = groups.map(function (group) {
+      return '<button class="order-filter-tab ' + (ownerOrders.group === group.id ? 'active' : '') + '" type="button" role="tab" aria-selected="' + (ownerOrders.group === group.id ? 'true' : 'false') + '" data-order-group="' + group.id + '">' + group.label + ' <span data-order-group-count="' + group.id + '">' + Number(ownerOrders.counts[group.id] || 0) + '</span></button>';
+    }).join('');
+    return '<div class="page-heading"><div><p class="eyebrow">Order management</p><h1>Orders</h1><p>Review requested quantities and move orders through delivery.</p></div></div><div class="order-filter-tabs" role="tablist" aria-label="Order status groups">' + tabs + '</div><div class="panel owner-search-panel"><label class="field">Search orders<input class="search" id="owner-order-search" value="' + esc(ownerOrders.search) + '" placeholder="YT-260807-0001 or customer name" autocomplete="off"></label></div><div class="catalogue-result-heading"><span id="owner-order-count" aria-live="polite"></span></div><div class="panel table-wrap" id="owner-order-results" aria-busy="true"></div><div class="catalogue-more" id="owner-order-more"></div>';
   }
 
   function adminOrderTable(orders, editable) {
     if (!orders.length) return '<div class="cart-empty">No orders yet.</div>';
-    var statuses = ['Pending', 'Approved', 'Processing', 'Ready to Ship', 'Delivered'];
     return '<table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th>' + (editable ? '<th>Action</th>' : '') + '</tr></thead><tbody>' + orders.map(function (order) {
-      var control = editable ? '<select class="status-select" data-status="' + order.id + '">' + statuses.map(function (status) { return '<option value="' + status + '" ' + (order.status === status ? 'selected' : '') + '>' + status + '</option>'; }).join('') + '</select>' : badge(order.status);
-      return '<tr><td><span class="order-id">' + esc(order.orderNumber || order.id) + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(visibleOrderTotal(order)) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
+      var nextStatuses = { Pending: 'Approved', Approved: 'Processing', Processing: 'Ready to Ship', 'Ready to Ship': 'Delivered' };
+      var nextStatus = nextStatuses[order.status];
+      var control = editable ? '<select class="status-select" aria-label="Status for ' + esc(order.orderNumber) + '" data-status="' + order.id + '" ' + (!nextStatus ? 'disabled' : '') + '><option value="' + esc(order.status) + '" selected>' + esc(order.status) + '</option>' + (nextStatus ? '<option value="' + nextStatus + '">' + nextStatus + '</option>' : '') + '</select>' : badge(order.status);
+      return '<tr><td><span class="order-id">' + esc(order.orderNumber || 'Order') + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(visibleOrderTotal(order)) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
     }).join('') + '</tbody></table>';
   }
 
-  function matchingOwnerOrders(query) {
-    var term = String(query || '').trim().toLowerCase();
-    var idTerm = term.replace(/\D/g, '');
-    return state.orders.filter(function (order) {
-      return !term || String(order.customer || '').toLowerCase().indexOf(term) !== -1 || (idTerm && String(order.orderNumber || order.id).indexOf(idTerm) !== -1) || String(order.orderNumber || order.id).toLowerCase().indexOf(term.replace('#', '')) !== -1;
-    });
+  function renderOwnerOrderResults() {
+    var results = document.getElementById('owner-order-results');
+    var count = document.getElementById('owner-order-count');
+    var more = document.getElementById('owner-order-more');
+    if (!results || !count || !more) return;
+    document.querySelectorAll('[data-order-group-count]').forEach(function (badge) { badge.textContent = Number(ownerOrders.counts[badge.dataset.orderGroupCount] || 0); });
+    count.textContent = ownerOrders.loading && !ownerOrders.items.length ? 'Loading orders…' : 'Showing ' + ownerOrders.items.length + ' of ' + ownerOrders.total + ' order(s)';
+    results.setAttribute('aria-busy', ownerOrders.loading ? 'true' : 'false');
+    if (ownerOrders.loading && !ownerOrders.items.length) {
+      results.innerHTML = '<div class="table-skeleton">' + Array.from({ length: 6 }).map(function () { return '<div class="skeleton-row"><span></span><span></span><span></span><span></span></div>'; }).join('') + '</div>';
+      more.innerHTML = ''; return;
+    }
+    if (ownerOrders.error && !ownerOrders.items.length) {
+      results.innerHTML = '<div class="empty catalogue-error"><b>Orders could not be loaded.</b><span>' + esc(ownerOrders.error) + '</span><button class="secondary" id="retry-owner-orders">Try again</button></div>';
+      more.innerHTML = '';
+      document.getElementById('retry-owner-orders').addEventListener('click', function () { loadOwnerOrders(true); }); return;
+    }
+    results.innerHTML = ownerOrders.items.length ? adminOrderTable(ownerOrders.items, currentUser.role === 'owner') : '<div class="empty">No matching orders found in this group.</div>';
+    bindOrderTableActions(results);
+    if (ownerOrders.error) more.innerHTML = '<div class="inline-error">' + esc(ownerOrders.error) + ' <button class="text-link" id="retry-owner-orders-more">Retry</button></div>';
+    else if (ownerOrders.items.length < ownerOrders.total) more.innerHTML = '<button class="secondary" id="load-more-owner-orders" ' + (ownerOrders.loading ? 'disabled' : '') + '>' + (ownerOrders.loading ? 'Loading…' : 'Load more orders') + '</button>';
+    else more.innerHTML = ownerOrders.items.length ? '<span>All matching orders are shown.</span>' : '';
+    var retry = document.getElementById('retry-owner-orders-more'); if (retry) retry.addEventListener('click', function () { loadOwnerOrders(false); });
+    var loadMore = document.getElementById('load-more-owner-orders'); if (loadMore) loadMore.addEventListener('click', function () { loadOwnerOrders(false); });
   }
 
   function bindOrderTableActions(scope) {
@@ -921,7 +981,7 @@
 
   function customersPage() {
     var customers = state.users.filter(function (user) { return user.role === 'customer'; });
-    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Customer accounts</h1><p>Create accounts, control access and reset customer passwords.</p></div><button class="primary" id="new-customer">+ Create customer account</button></div><div class="panel table-wrap"><table><thead><tr><th>Customer</th><th>Username</th><th>Orders</th><th>Access</th><th>Action</th></tr></thead><tbody>' + customers.map(function (customer) { return '<tr><td><b>' + esc(customer.name) + '</b></td><td>' + esc(customer.username) + '</td><td>' + state.orders.filter(function (order) { return String(order.customerId) === String(customer.id); }).length + '</td><td>' + badge(customer.status) + '</td><td><div class="action-row"><button class="table-action" data-toggle-account="' + customer.id + '">' + (customer.status === 'Active' ? 'Disable' : 'Enable') + '</button><button class="table-action" data-reset-account="' + customer.id + '">Reset password</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Customer accounts</h1><p>Create accounts, control access and reset customer passwords.</p></div><button class="primary" id="new-customer">+ Create customer account</button></div><div class="panel table-wrap"><table><thead><tr><th>Customer</th><th>Username</th><th>Orders</th><th>Access</th><th>Action</th></tr></thead><tbody>' + customers.map(function (customer) { return '<tr><td><b>' + esc(customer.name) + '</b></td><td>' + esc(customer.username) + '</td><td>' + Number(ownerOrders.customerCounts[String(customer.id)] || 0) + '</td><td>' + badge(customer.status) + '</td><td><div class="action-row"><button class="table-action" data-toggle-account="' + customer.id + '">' + (customer.status === 'Active' ? 'Disable' : 'Enable') + '</button><button class="table-action" data-reset-account="' + customer.id + '">Reset password</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
   }
 
   function ownersPage() {
@@ -962,11 +1022,18 @@
     }
     if (document.getElementById('dashboard-low-stock')) loadDashboardLowStock();
     var ownerOrderSearch = document.getElementById('owner-order-search');
-    if (ownerOrderSearch) ownerOrderSearch.addEventListener('input', function () {
-      var results = document.getElementById('owner-order-results');
-      results.innerHTML = adminOrderTable(matchingOwnerOrders(ownerOrderSearch.value), true);
-      bindOrderTableActions(results);
-    });
+    if (ownerOrderSearch) {
+      ownerOrderSearch.addEventListener('input', debounce(function (event) { ownerOrders.search = event.target.value.trim(); loadOwnerOrders(true); }, 350));
+      document.querySelectorAll('[data-order-group]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          if (ownerOrders.group === button.dataset.orderGroup) return;
+          ownerOrders.group = button.dataset.orderGroup;
+          ownerOrders.items = []; ownerOrders.total = 0; ownerOrders.error = '';
+          renderAdminPage(); loadOwnerOrders(true);
+        });
+      });
+      renderOwnerOrderResults();
+    }
     ['voucher-title', 'voucher-color', 'voucher-footer'].forEach(function (id) { var input = document.getElementById(id); if (input) input.addEventListener('input', renderLiveVoucherPreview); });
   }
 
@@ -1065,10 +1132,17 @@
   async function updateStatus(orderId, status) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order) return;
+    var previousStatus = order.status;
+    order.status = status;
+    renderOwnerOrderResults();
     try {
       await orderService.updateStatus(orderId, status.toLowerCase().replace(/\s+/g, '_'));
-      await loadRemoteOrders(); renderAdminPage(); toast('Order ' + (order.orderNumber || orderId) + ' updated to ' + status + '.');
-    } catch (error) { toast(error.message || 'Order status could not be updated.'); }
+      await loadOwnerOrders(true); renderAdminPage(); toast('Order ' + (order.orderNumber || '') + ' updated to ' + status + '.');
+    } catch (error) {
+      order.status = previousStatus;
+      renderOwnerOrderResults();
+      toast(error.message || 'Order status could not be updated.');
+    }
   }
 
   function renderOwnerOrderModal(orderId, activeTab) {
@@ -1638,7 +1712,7 @@
       var product = getProduct(item.productId);
       return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || order.id) + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>Order date: ' + order.date + '</small>' + (order.deliveryDate ? '<small>Delivery date: ' + esc(order.deliveryDate) + '</small>' : '') + '</div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
+    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || 'Order') + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>Order date: ' + order.date + '</small>' + (order.deliveryDate ? '<small>Delivery date: ' + esc(order.deliveryDate) + '</small>' : '') + '</div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
     var savedPaper = localStorage.getItem('yadanar-voucher-paper-size') || 'a4';
     var printButton = document.getElementById('print-voucher');
     printButton.insertAdjacentHTML('beforebegin', '<label class="voucher-print-size">Print size<select id="voucher-paper-size"><option value="a4" ' + (savedPaper === 'a4' ? 'selected' : '') + '>A4</option><option value="a5" ' + (savedPaper === 'a5' ? 'selected' : '') + '>A5</option></select></label>');
