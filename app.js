@@ -1,8 +1,12 @@
 (function () {
   'use strict';
 
-  var STORAGE = 'yt-stationery-demo-v2';
-  var AUTO_BACKUP = 'yt-stationery-auto-backup-v2';
+  var LEGACY_DEMO_STORAGE = 'yt-stationery-demo-v2';
+  var LEGACY_DEMO_BACKUP = 'yt-stationery-auto-backup-v2';
+  var LEGACY_DEMO_CART = 'yt-cart-v2';
+  var STORAGE = 'yt-stationery-state-v3';
+  var AUTO_BACKUP = 'yt-stationery-auto-backup-v3';
+  var CART_STORAGE = 'yt-cart-v3';
   var SUPABASE_URL = 'https://tfvwfpvdqcbgqnijhhpd.supabase.co';
   var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_1TYSPsIChtMyo_NjcSHQZg_A7uS0PsX';
   var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
@@ -22,40 +26,8 @@
 
   applyTheme(localStorage.getItem(THEME_STORAGE) || 'light');
 
-  function seedState() {
-    return {
-      products: [
-        { id: 1, name: 'Pastel Gel Pen Set', category: 'Writing', price: 6500, stock: 24, photo: '', bg: '#f9e5e9' },
-        { id: 2, name: 'A5 Spiral Notebook', category: 'Notebook', price: 4200, stock: 38, photo: '', bg: '#e8f0e1' },
-        { id: 3, name: 'Cute Sticker Pack', category: 'Fancy', price: 2800, stock: 18, photo: '', bg: '#fff0cb' },
-        { id: 4, name: 'Desk Organizer', category: 'Office', price: 12500, stock: 7, photo: '', bg: '#e5edf8' },
-        { id: 5, name: 'Floral Washi Tape', category: 'Fancy', price: 3200, stock: 16, photo: '', bg: '#f5e3f5' },
-        { id: 6, name: 'Mini Highlighter Set', category: 'Writing', price: 5500, stock: 22, photo: '', bg: '#fdebd9' },
-        { id: 7, name: 'Paper Clip Box', category: 'Office', price: 1800, stock: 35, photo: '', bg: '#e3f2ef' },
-        { id: 8, name: 'Gift Wrap Bundle', category: 'Fancy', price: 7500, stock: 9, photo: '', bg: '#f6e5df' }
-      ],
-      users: [
-        { id: 1, username: 'owner', name: 'Yadanar Theingi Owner', role: 'owner', status: 'Active', created: '26 Jul 2026' },
-        { id: 2, username: 'mya', name: 'Mya Thiri', role: 'customer', status: 'Active', created: '20 Jul 2026' },
-        { id: 3, username: 'aung', name: 'Aung Min', role: 'customer', status: 'Active', created: '22 Jul 2026' }
-      ],
-      orders: [
-        { id: 1008, customerId: 2, customer: 'Mya Thiri', items: [{ productId: 1, quantity: 2, unitPrice: 6500 }, { productId: 3, quantity: 1, unitPrice: 2800 }], total: 15800, status: 'Pending', date: '26 Jul 2026', phone: '09 420 000 111', address: 'Sanchaung Township, Yangon', busStation: '', deliveryDate: '', note: 'Please pack carefully.', adjusted: false },
-        { id: 1007, customerId: 3, customer: 'Aung Min', items: [{ productId: 2, quantity: 3, unitPrice: 4200 }], total: 12600, status: 'Ready to Ship', date: '25 Jul 2026', phone: '09 420 000 222', address: 'Pyin Oo Lwin, Mandalay', busStation: 'Pyin Oo Lwin Highway Gate', deliveryDate: '', note: '', adjusted: false },
-        { id: 1006, customerId: 2, customer: 'Mya Thiri', items: [{ productId: 4, quantity: 1, unitPrice: 12500 }, { productId: 7, quantity: 4, unitPrice: 1800 }], total: 19700, status: 'Delivered', date: '23 Jul 2026', phone: '09 420 000 111', address: 'Sanchaung Township, Yangon', busStation: '', deliveryDate: '', note: '', adjusted: false }
-      ],
-      inventory: [
-        { id: 1, productId: 1, product: 'Pastel Gel Pen Set', type: 'IN', quantity: 30, date: '24 Jul 2026', note: 'New supplier delivery' },
-        { id: 2, productId: 4, product: 'Desk Organizer', type: 'OUT', quantity: 2, date: '25 Jul 2026', note: 'Customer orders' },
-        { id: 3, productId: 6, product: 'Mini Highlighter Set', type: 'IN', quantity: 25, date: '25 Jul 2026', note: 'New supplier delivery' }
-      ],
-      settings: {
-        maintenanceMode: false,
-        backupFrequency: 'Weekly',
-        lastBackup: '',
-        voucher: { title: 'Delivery Voucher', footer: 'Thank you for shopping with Yadanar Theingi Stationery & Fancy.', accentColor: '#8c1740' }
-      }
-    };
+  function seedState(settings) {
+    return { products: [], users: [], orders: [], inventory: [], settings: settings || defaultSettings() };
   }
 
   function defaultSettings() {
@@ -90,6 +62,14 @@
   }
 
   function loadState() {
+    var preservedSettings = null;
+    try {
+      var legacy = JSON.parse(localStorage.getItem(LEGACY_DEMO_STORAGE));
+      if (legacy && legacy.settings) preservedSettings = legacy.settings;
+    } catch (error) { }
+    localStorage.removeItem(LEGACY_DEMO_STORAGE);
+    localStorage.removeItem(LEGACY_DEMO_BACKUP);
+    localStorage.removeItem(LEGACY_DEMO_CART);
     try {
       var saved = JSON.parse(localStorage.getItem(STORAGE));
       if (saved && saved.products && saved.users && saved.orders) {
@@ -98,7 +78,7 @@
         return normalized;
       }
     } catch (error) { }
-    var fresh = seedState();
+    var fresh = normalize(seedState(preservedSettings || defaultSettings()));
     localStorage.setItem(STORAGE, JSON.stringify(fresh));
     return fresh;
   }
@@ -202,11 +182,11 @@
   }
 
   function cart() {
-    try { return JSON.parse(localStorage.getItem('yt-cart-v2') || '[]'); } catch (error) { return []; }
+    try { return JSON.parse(localStorage.getItem(CART_STORAGE) || '[]'); } catch (error) { return []; }
   }
 
   function setCart(items) {
-    localStorage.setItem('yt-cart-v2', JSON.stringify(items));
+    localStorage.setItem(CART_STORAGE, JSON.stringify(items));
   }
 
   function cartCount() {

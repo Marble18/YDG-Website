@@ -104,6 +104,9 @@ First-version decision:
 - README and UI must remain free of usable demo passwords.
 - Browser JSON export is not a production database backup.
 - A purchased custom domain is normally not free; use the Netlify free subdomain until purchasing one.
+- PR #9 was re-scoped to a two-phase pre-production demo-data audit, backup and reset. After explicit confirmation, Phase 2 completed on 2026-08-05: 22 products, eight categories, one managed test customer/Auth user and six exact product images were removed. The primary owner and settings were preserved.
+- The Phase 1 safety snapshot is stored locally under `.codex-tmp/pr9-phase1-20260805` and is excluded from Git. It contains JSON data, schema metadata and a Storage manifest; treat it as sensitive. It is not a directly restorable `pg_dump`, and Storage image bytes are not included.
+- Free Plan does not provide downloadable/automatic database backups or PITR. A separate Storage object backup is required because database backups include metadata, not object bytes.
 
 ## 8. Required workflow
 
@@ -117,10 +120,10 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. PR #9: move cart and order submission to Supabase database transactions/RPC.
-2. Complete owner order management and private delivery-proof flow.
-3. Move voucher, app settings and maintenance mode to Supabase.
-4. Add browser/mobile regression checks and production backup procedure.
+1. Complete PR #9 deploy-preview manual validation and merge the documented pre-production reset.
+2. Move cart and order submission to Supabase database transactions/RPC in a separately approved follow-up PR.
+3. Complete owner order management and private delivery-proof flow.
+4. Add browser/mobile regression checks and a production-grade database plus Storage backup procedure.
 
 ## 10. Validation checklist
 
@@ -146,3 +149,5 @@ First-version decision:
 - 2026-08-05: Merged PR #6 after product CRUD, image input, category autocomplete, database constraints and mobile layout validation.
 - 2026-08-05: Drafted PR #7 template-based Product Excel export; Unit is appended after Stock, local spreadsheet/runtime samples passed, and deploy-preview empty/success/filter/mobile flows were validated.
 - 2026-08-05: PR #7 was merged. Started PR #8 catalogue performance: 20-row database pagination, database category/search filters, stable ordering, lazy images, complete loading/error/empty/count states, catalogue indexes and protected category-wide price adjustment. Cart/orders remains scheduled for PR #9 after PR #8 approval.
+- 2026-08-05: PR #8 merged. PR #9 Phase 1 completed a read-only pre-production audit and local safety snapshot: 22 products, eight categories, one test customer and six product-image objects are proposed for cleanup; owner Auth/profile, schema, policies, functions, settings and project configuration remain protected. No live cleanup has run.
+- 2026-08-05: After explicit confirmation, PR #9 Phase 2 removed the exact audited demo records and Storage objects. Post-cleanup counts are zero for products, categories, inventory, orders, order items, carts and both Storage buckets; only the active primary owner remains, and voucher/app settings remain unchanged. Browser-local demo seed data and legacy commerce keys were retired.
