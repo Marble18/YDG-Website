@@ -12,6 +12,7 @@
   var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
   var accountService = window.createAccountService(supabaseClient);
   var productCatalogueService = window.createProductCatalogueService(supabaseClient);
+  var orderService = window.createOrderService(supabaseClient);
   var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
   var currentUser = null;
@@ -22,6 +23,8 @@
   var customerCatalogue = { items: [], total: 0, search: '', categoryId: '', loading: false, error: '', requestId: 0 };
   var ownerCatalogue = { items: [], total: 0, search: '', categoryId: '', visibility: 'all', loading: false, error: '', requestId: 0 };
   var dashboardLowStock = { items: [], total: 0, loading: false, error: '' };
+  var remoteCart = [];
+  var checkoutKey = null;
   var THEME_STORAGE = 'yt-theme-v2';
 
   applyTheme(localStorage.getItem(THEME_STORAGE) || 'light');
@@ -171,26 +174,92 @@
   }
 
   function modal(html) {
-    document.getElementById('modal-root').innerHTML = '<div class="modal-backdrop"><div class="modal">' + html + '</div></div>';
+    var root = document.getElementById('modal-root');
+    var previousFocus = document.activeElement;
+    root.innerHTML = '<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">' + html + '</div></div>';
     var close = document.getElementById('close-modal');
     if (close) close.addEventListener('click', closeModal);
+    root._previousFocus = previousFocus;
+    root.querySelector('.modal-backdrop').addEventListener('click', function (event) { if (event.target.classList.contains('modal-backdrop')) closeModal(); });
+    root._escapeHandler = function (event) {
+      if (event.key === 'Escape') return closeModal();
+      if (event.key !== 'Tab') return;
+      var focusable = Array.from(root.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+      if (!focusable.length) return;
+      var first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', root._escapeHandler);
+    if (close) close.focus();
   }
 
   function closeModal() {
     var root = document.getElementById('modal-root');
-    if (root) root.innerHTML = '';
+    if (root) {
+      if (root._escapeHandler) document.removeEventListener('keydown', root._escapeHandler);
+      var previousFocus = root._previousFocus;
+      root.innerHTML = '';
+      if (previousFocus && previousFocus.focus) previousFocus.focus();
+    }
   }
 
   function cart() {
-    try { return JSON.parse(localStorage.getItem(CART_STORAGE) || '[]'); } catch (error) { return []; }
-  }
-
-  function setCart(items) {
-    localStorage.setItem(CART_STORAGE, JSON.stringify(items));
+    return remoteCart.slice();
   }
 
   function cartCount() {
     return cart().reduce(function (sum, item) { return sum + item.quantity; }, 0);
+  }
+
+  async function loadRemoteCart() {
+    var rows = await orderService.listCart();
+    remoteCart = rows.filter(function (row) { return row.products && row.products.is_active; }).map(function (row) {
+      var product = mapDatabaseProduct(Object.assign({}, row.products, { categories: null, category_id: null, stock_quantity: 0 }));
+      mergeProductCache([product]);
+      return { productId: row.product_id, quantity: Number(row.quantity) };
+    });
+  }
+
+  async function migrateLegacyCartOnce() {
+    var raw = localStorage.getItem(CART_STORAGE);
+    if (!raw) return loadRemoteCart();
+    var legacy;
+    try { legacy = JSON.parse(raw); } catch (error) { legacy = []; }
+    if (Array.isArray(legacy)) {
+      var ids = legacy.map(function (item) { return item && item.productId; }).filter(Boolean);
+      var products = ids.length ? (await productCatalogueService.getByIds(ids)).map(mapDatabaseProduct) : [];
+      for (var index = 0; index < legacy.length; index += 1) {
+        var item = legacy[index];
+        var product = products.find(function (entry) { return String(entry.id) === String(item && item.productId); });
+        var quantity = Number(item && item.quantity);
+        if (product && !product.deleted && Number.isInteger(quantity) && quantity >= product.minimumOrderQuantity) {
+          await orderService.setCartItem(product.id, quantity);
+        }
+      }
+    }
+    localStorage.removeItem(CART_STORAGE);
+    await loadRemoteCart();
+  }
+
+  function mapDatabaseOrder(row) {
+    return {
+      id: row.id, orderNumber: row.order_number, customerId: row.customer_id,
+      customer: row.profiles ? (row.profiles.full_name || row.profiles.username) : 'Customer',
+      items: (row.order_items || []).map(function (item) { return {
+        id: item.id, productId: item.product_id, productName: item.product_name, unit: item.unit,
+        unitPrice: Number(item.unit_price), quantity: Number(item.quantity), allocatedQuantity: Number(item.allocated_quantity),
+        confirmedPrice: Number(item.line_total), picked: Boolean(item.picked)
+      }; }),
+      total: Number(row.total), status: String(row.status || 'pending').replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }),
+      date: new Date(row.created_at).toLocaleDateString('en-GB'), phone: row.contact_phone || '', address: row.delivery_address || '',
+      busStation: row.bus_station || '', deliveryDate: row.preferred_delivery_date || '', note: row.customer_note || '',
+      proofOfDelivery: row.delivery_proof_url || '', adjusted: false
+    };
+  }
+
+  async function loadRemoteOrders() {
+    state.orders = (await orderService.listOrders()).map(mapDatabaseOrder);
   }
 
   function topbar(hasCart) {
@@ -339,10 +408,12 @@
           throw new Error('Customer ordering is temporarily under maintenance.');
         }
         await loadCatalogueData();
+        await loadRemoteOrders();
         if (currentUser.role === 'owner' || currentUser.role === 'staff') {
           if (currentUser.role === 'owner') await loadManagedAccounts();
           renderAdmin();
         } else {
+          await migrateLegacyCartOnce();
           renderCustomer();
         }
       } catch (error) {
@@ -493,14 +564,13 @@
     grid.innerHTML = products.length ? products.map(function (product) {
       var hasPhoto = /^(data:image\/|https:\/\/)/.test(String(product.photo || ''));
       var photo = hasPhoto ? '<button class="product-photo photo-preview-button" data-preview-photo="' + product.id + '" aria-label="Preview ' + esc(product.name) + '" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</button>' : '<div class="product-photo" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</div>';
-      var canOrder = product.stock >= product.minimumOrderQuantity;
-      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + ' / ' + esc(product.unit) + '</span><span>' + (product.stock ? product.stock + ' in stock · min ' + product.minimumOrderQuantity : 'Out of stock') + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="' + product.minimumOrderQuantity + '" max="' + product.stock + '" value="' + product.minimumOrderQuantity + '" ' + (canOrder ? '' : 'disabled') + '><button class="primary add-to-cart" data-product="' + product.id + '" ' + (canOrder ? '' : 'disabled') + '>Add</button></div></div></article>';
+      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + ' / ' + esc(product.unit) + '</span><span>Minimum ' + product.minimumOrderQuantity + ' ' + esc(product.unit) + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="' + product.minimumOrderQuantity + '" step="1" value="' + product.minimumOrderQuantity + '"><button class="primary add-to-cart" data-product="' + product.id + '">Add</button></div></div></article>';
     }).join('') : '<div class="empty">No matching products found.</div>';
     document.querySelectorAll('[data-product]').forEach(function (button) {
-      button.addEventListener('click', function () { addToCart(Number(button.dataset.product), Number(document.getElementById('qty-' + button.dataset.product).value || 1)); });
+      button.addEventListener('click', function () { addToCart(button.dataset.product, Number(document.getElementById('qty-' + button.dataset.product).value || 1)); });
     });
     document.querySelectorAll('[data-preview-photo]').forEach(function (button) {
-      button.addEventListener('click', function () { renderPhotoPreview(Number(button.dataset.previewPhoto)); });
+      button.addEventListener('click', function () { renderPhotoPreview(button.dataset.previewPhoto); });
     });
     if (customerCatalogue.error) more.innerHTML = '<div class="inline-error">' + esc(customerCatalogue.error) + ' <button class="text-link" id="retry-customer-more">Retry</button></div>';
     else if (customerCatalogue.items.length < customerCatalogue.total) more.innerHTML = '<button class="secondary" id="load-more-products" ' + (customerCatalogue.loading ? 'disabled' : '') + '>' + (customerCatalogue.loading ? 'Loading…' : 'Load more products') + '</button>';
@@ -512,7 +582,10 @@
   function renderPhotoPreview(productId) {
     var product = getProduct(productId);
     if (!product || !/^(data:image\/|https:\/\/)/.test(String(product.photo || ''))) return;
-    modal('<div class="modal-head"><div><p class="eyebrow">Product photo</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><div class="photo-lightbox"><img src="' + esc(product.photo) + '" alt="' + esc(product.name) + '"></div>');
+    modal('<div class="modal-head"><div><p class="eyebrow">Product photo</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" aria-label="Close photo preview">×</button></div><div class="photo-lightbox loading" id="photo-lightbox"><span>Loading image…</span><img src="' + esc(product.photo) + '" alt="' + esc(product.name) + '"></div>');
+    var image = document.querySelector('#photo-lightbox img');
+    image.addEventListener('load', function () { image.parentElement.classList.remove('loading'); });
+    image.addEventListener('error', function () { image.parentElement.className = 'photo-lightbox error'; image.parentElement.innerHTML = '<span>Photo could not be loaded.</span>'; });
   }
 
   function renderCustomerMenu() {
@@ -538,23 +611,24 @@
 
   function renderRecentOrderResults(query) {
     var search = String(query || '').toLowerCase().replace('#', '');
-    var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id && ('yt-' + order.id).indexOf(search) > -1; }).sort(function (a, b) { return b.id - a.id; });
-    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
-    document.querySelectorAll('[data-menu-order-details]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(Number(button.dataset.menuOrderDetails)); }); });
-    document.querySelectorAll('[data-menu-order-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.menuOrderVoucher)); }); });
+    var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id && String(order.orderNumber || order.id).toLowerCase().indexOf(search) > -1; });
+    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">' + esc(order.orderNumber || order.id) + '</td><td>' + order.date + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
+    document.querySelectorAll('[data-menu-order-details]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(button.dataset.menuOrderDetails); }); });
+    document.querySelectorAll('[data-menu-order-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.menuOrderVoucher); }); });
   }
 
-  function addToCart(productId, quantity) {
+  async function addToCart(productId, quantity) {
     var product = getProduct(productId);
-    if (!product || product.stock < product.minimumOrderQuantity) return;
-    quantity = Math.max(product.minimumOrderQuantity, Math.min(product.stock, Number(quantity) || product.minimumOrderQuantity));
-    var items = cart();
-    var line = items.find(function (item) { return item.productId === productId; });
-    if (line) line.quantity = Math.min(product.stock, line.quantity + quantity);
-    else items.push({ productId: productId, quantity: quantity });
-    setCart(items);
-    document.querySelector('.cart-count').textContent = cartCount();
-    toast(product.name + ' added to cart.');
+    if (!product) return;
+    quantity = Number(quantity);
+    if (!Number.isInteger(quantity) || quantity < product.minimumOrderQuantity) return toast('Enter at least the minimum whole-number quantity.');
+    var existing = cart().find(function (item) { return String(item.productId) === String(productId); });
+    try {
+      await orderService.setCartItem(productId, (existing ? existing.quantity : 0) + quantity);
+      await loadRemoteCart();
+      document.querySelector('.cart-count').textContent = cartCount();
+      toast(product.name + ' added to cart.');
+    } catch (error) { toast(error.message || 'Item could not be added.'); }
   }
 
   function cartLines() {
@@ -570,49 +644,52 @@
 
   async function renderCart() {
     try {
+      await loadRemoteCart();
       await ensureCachedProducts(cart().map(function (line) { return line.productId; }));
     } catch (error) {
       toast(error.message || 'Cart products could not be refreshed.');
     }
     var items = cartLines();
-    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' / ' + esc(line.product.unit) + ' · minimum ' + line.product.minimumOrderQuantity + '</span></div><input type="number" min="' + line.product.minimumOrderQuantity + '" max="' + line.product.stock + '" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
+    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' / ' + esc(line.product.unit) + ' · minimum ' + line.product.minimumOrderQuantity + '</span></div><input type="number" min="' + line.product.minimumOrderQuantity + '" step="1" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
     document.querySelectorAll('[data-cart-quantity]').forEach(function (input) {
-      input.addEventListener('change', function () {
-        var items = cart();
-        var item = items.find(function (entry) { return entry.productId === Number(input.dataset.cartQuantity); });
+      input.addEventListener('change', async function () {
+        var item = cart().find(function (entry) { return String(entry.productId) === input.dataset.cartQuantity; });
         var product = getProduct(item.productId);
-        item.quantity = Math.max(product.minimumOrderQuantity, Math.min(product.stock, Number(input.value) || product.minimumOrderQuantity));
-        setCart(items);
-        renderCart();
+        var quantity = Number(input.value);
+        if (!Number.isInteger(quantity) || quantity < product.minimumOrderQuantity) return toast('Quantity is below the product minimum.');
+        try { await orderService.setCartItem(item.productId, quantity); await renderCart(); } catch (error) { toast(error.message || 'Cart could not be updated.'); }
       });
     });
     document.querySelectorAll('[data-remove-cart]').forEach(function (button) {
-      button.addEventListener('click', function () { setCart(cart().filter(function (line) { return line.productId !== Number(button.dataset.removeCart); })); renderCart(); document.querySelector('.cart-count').textContent = cartCount(); });
+      button.addEventListener('click', async function () { try { await orderService.removeCartItem(button.dataset.removeCart); await renderCart(); document.querySelector('.cart-count').textContent = cartCount(); } catch (error) { toast(error.message || 'Item could not be removed.'); } });
     });
     var checkout = document.getElementById('checkout');
     if (checkout) checkout.addEventListener('click', renderCheckout);
   }
 
   function renderCheckout() {
+    checkoutKey = checkoutKey || crypto.randomUUID();
     modal('<form id="checkout-form"><div class="modal-head"><div><p class="eyebrow">Final step</p><h2>Confirm your order</h2></div><button class="icon-btn" type="button" id="close-modal">×</button></div><p class="subtext">No online payment is needed. The shop will review and approve this order.</p><div class="form-grid"><label class="field">Contact phone<input name="phone" required placeholder="09xxxxxxxxx"></label><label class="field">Preferred delivery date<input name="deliveryDate" type="date"></label><label class="field full-field">Delivery address / လိပ်စာ<input name="address" required placeholder="House / Street / Township / City"></label><label class="field full-field">Bus station name / ကားဂိတ်အမည် (optional)<input name="busStation" placeholder="For out-of-town customer orders only"></label><label class="field full-field">Order note (optional)<input name="note"></label></div><div class="two-button"><button class="secondary" type="button" id="back-to-cart">Back</button><button class="primary" type="submit">Submit order</button></div></form>');
     document.getElementById('back-to-cart').addEventListener('click', renderCart);
     document.getElementById('checkout-form').addEventListener('submit', submitOrder);
   }
 
-  function submitOrder(event) {
+  async function submitOrder(event) {
     event.preventDefault();
     var lines = cartLines();
     if (!lines.length) return;
-    if (lines.some(function (line) { return line.quantity > line.product.stock; })) return toast('Stock has changed. Please update the cart.');
     var data = new FormData(event.target);
-    var id = Math.max.apply(null, state.orders.map(function (order) { return order.id; })) + 1;
-    var total = lines.reduce(function (sum, line) { return sum + line.product.price * line.quantity; }, 0);
-    lines.forEach(function (line) {
-      line.product.stock -= line.quantity;
-      state.inventory.unshift({ id: Date.now() + line.product.id, productId: line.product.id, product: line.product.name, type: 'OUT', quantity: line.quantity, date: today(), note: 'Order #YT-' + id });
-    });
-    state.orders.unshift({ id: id, customerId: currentUser.id, customer: currentUser.name, items: lines.map(function (line) { return { productId: line.product.id, quantity: line.quantity, unitPrice: line.product.price }; }), total: total, status: 'Pending', date: today(), phone: data.get('phone') || '', address: data.get('address') || '', busStation: data.get('busStation') || '', deliveryDate: data.get('deliveryDate') || '', note: data.get('note') || '', adjusted: false });
-    saveState(); setCart([]); closeModal(); renderCustomer(); toast('Order #YT-' + id + ' was submitted successfully.');
+    var button = event.target.querySelector('button[type="submit"]');
+    button.disabled = true; button.textContent = 'Submitting…';
+    try {
+      var result = await orderService.checkout({ idempotencyKey: checkoutKey, phone: data.get('phone'), address: data.get('address'), busStation: data.get('busStation'), deliveryDate: data.get('deliveryDate'), note: data.get('note') });
+      checkoutKey = null;
+      await loadRemoteCart(); await loadRemoteOrders();
+      closeModal(); renderCustomer(); toast('Order ' + result[0].order_number + ' was submitted successfully.');
+    } catch (error) {
+      button.disabled = false; button.textContent = 'Submit order';
+      toast(error.message || 'Order could not be submitted. Your cart is unchanged.');
+    }
   }
 
   function statusClass(status) {
@@ -633,9 +710,9 @@
 
   function renderCustomerOrders() {
     var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id; }).sort(function (a, b) { return b.id - a.id; });
-    document.getElementById('customer-orders').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + orderCount(order) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-view-order="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-customer-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">You have not placed an order yet.</div>';
-    document.querySelectorAll('[data-view-order]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(Number(button.dataset.viewOrder)); }); });
-    document.querySelectorAll('[data-customer-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.customerVoucher)); }); });
+    document.getElementById('customer-orders').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">' + esc(order.orderNumber || order.id) + '</td><td>' + order.date + '</td><td>' + orderCount(order) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-view-order="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-customer-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">You have not placed an order yet.</div>';
+    document.querySelectorAll('[data-view-order]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(button.dataset.viewOrder); }); });
+    document.querySelectorAll('[data-customer-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.customerVoucher); }); });
   }
 
   function renderOrderDetails(orderId) {
@@ -644,9 +721,9 @@
     var isCustomer = currentUser.role === 'customer';
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
-      return product ? '<tr><td>' + esc(product.name) + '</td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td></tr>' : '';
+      return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>#YT-' + order.id + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (order.adjusted ? '<div class="order-alert">The shop updated the available quantity. ' + (isCustomer ? 'Your confirmed quantities are shown below.' : 'The total below reflects the confirmed quantities.') + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Confirmed qty</th><th>' + (isCustomer ? 'Price' : 'Total') + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + (isCustomer ? '' : '<div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>') + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
+    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (order.adjusted ? '<div class="order-alert">The shop updated the available quantity. ' + (isCustomer ? 'Your confirmed quantities are shown below.' : 'The total below reflects the confirmed quantities.') + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested qty</th><th>' + (isCustomer ? 'Price' : 'Total') + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + (isCustomer ? '' : '<div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>') + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
     var viewVoucher = document.getElementById('view-voucher');
     if (viewVoucher) viewVoucher.addEventListener('click', function () { renderVoucher(order.id); });
   }
@@ -709,7 +786,7 @@
   }
 
   function ordersPage() {
-    return '<div class="page-heading"><div><p class="eyebrow">Order management</p><h1>Orders</h1><p>Adjust confirmed quantities, move orders through delivery, and upload proof of delivery.</p></div></div><div class="panel owner-search-panel"><input class="search" id="owner-order-search" placeholder="Search Order ID or customer name..."></div><div class="panel table-wrap" id="owner-order-results">' + adminOrderTable(state.orders.slice().sort(function (a, b) { return b.id - a.id; }), true) + '</div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Order management</p><h1>Orders</h1><p>Review requested quantities and move orders through delivery.</p></div></div><div class="panel owner-search-panel"><input class="search" id="owner-order-search" placeholder="Search Order ID or customer name..."></div><div class="panel table-wrap" id="owner-order-results">' + adminOrderTable(state.orders, true) + '</div>';
   }
 
   function adminOrderTable(orders, editable) {
@@ -717,23 +794,23 @@
     var statuses = ['Pending', 'Approved', 'Processing', 'Ready to Ship', 'Delivered'];
     return '<table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th>' + (editable ? '<th>Action</th>' : '') + '</tr></thead><tbody>' + orders.map(function (order) {
       var control = editable ? '<select class="status-select" data-status="' + order.id + '">' + statuses.map(function (status) { return '<option value="' + status + '" ' + (order.status === status ? 'selected' : '') + '>' + status + '</option>'; }).join('') + '</select>' : badge(order.status);
-      return '<tr><td><span class="order-id">#YT-' + order.id + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(order.total) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
+      return '<tr><td><span class="order-id">' + esc(order.orderNumber || order.id) + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(order.total) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
     }).join('') + '</tbody></table>';
   }
 
   function matchingOwnerOrders(query) {
     var term = String(query || '').trim().toLowerCase();
     var idTerm = term.replace(/\D/g, '');
-    return state.orders.slice().sort(function (a, b) { return b.id - a.id; }).filter(function (order) {
-      return !term || String(order.customer || '').toLowerCase().indexOf(term) !== -1 || (idTerm && String(order.id).indexOf(idTerm) !== -1) || ('yt-' + order.id).indexOf(term.replace('#', '')) !== -1;
+    return state.orders.filter(function (order) {
+      return !term || String(order.customer || '').toLowerCase().indexOf(term) !== -1 || (idTerm && String(order.orderNumber || order.id).indexOf(idTerm) !== -1) || String(order.orderNumber || order.id).toLowerCase().indexOf(term.replace('#', '')) !== -1;
     });
   }
 
   function bindOrderTableActions(scope) {
     var root = scope || document;
-    root.querySelectorAll('[data-status]').forEach(function (select) { select.addEventListener('change', function () { updateStatus(Number(select.dataset.status), select.value); }); });
-    root.querySelectorAll('[data-owner-order-view]').forEach(function (button) { button.addEventListener('click', function () { renderOwnerOrderModal(Number(button.dataset.ownerOrderView), 'view'); }); });
-    root.querySelectorAll('[data-owner-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.ownerVoucher)); }); });
+    root.querySelectorAll('[data-status]').forEach(function (select) { select.addEventListener('change', function () { updateStatus(select.dataset.status, select.value); }); });
+    root.querySelectorAll('[data-owner-order-view]').forEach(function (button) { button.addEventListener('click', function () { renderTransactionalOwnerOrderModal(button.dataset.ownerOrderView); }); });
+    root.querySelectorAll('[data-owner-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.ownerVoucher); }); });
   }
 
   function productsPage() {
@@ -917,12 +994,35 @@
     });
   }
 
-  function updateStatus(orderId, status) {
+  function renderTransactionalOwnerOrderModal(orderId) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order) return;
-    if (status === 'Delivered' && !order.proofOfDelivery) return renderProofForm(orderId);
-    order.status = status;
-    saveState(); renderAdminPage(); toast('Order #YT-' + orderId + ' updated to ' + status + '.');
+    var rows = order.items.map(function (item) {
+      return '<tr><td><b>' + esc(item.productName) + '</b><br><small>' + money(item.unitPrice) + ' / ' + esc(item.unit) + '</small></td><td>' + item.quantity + '</td><td><input class="qty-input" type="number" min="0" max="' + item.quantity + '" value="' + item.allocatedQuantity + '" data-allocation="' + item.id + '"></td><td>' + money(item.confirmedPrice) + '</td></tr>';
+    }).join('');
+    modal('<div class="modal-head"><div><p class="eyebrow">' + esc(order.orderNumber || order.id) + '</p><h2>Order details</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address) + '</b></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><p class="subtext">Requested quantity is preserved. Allocation may be increased only when current stock is available; reducing it returns stock transactionally.</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested</th><th>Allocated</th><th>Requested total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div><button class="primary full" id="save-allocations">Save allocations</button>');
+    document.getElementById('save-allocations').addEventListener('click', async function (event) {
+      var button = event.currentTarget; button.disabled = true; button.textContent = 'Saving…';
+      try {
+        var inputs = Array.from(document.querySelectorAll('[data-allocation]'));
+        for (var index = 0; index < inputs.length; index += 1) {
+          var quantity = Number(inputs[index].value);
+          if (!Number.isInteger(quantity)) throw new Error('Allocated quantities must be whole numbers.');
+          var original = order.items.find(function (item) { return item.id === inputs[index].dataset.allocation; });
+          if (quantity !== original.allocatedQuantity) await orderService.setAllocation(original.id, quantity);
+        }
+        await loadRemoteOrders(); await loadCatalogueData(); renderAdminPage(); closeModal(); toast('Stock allocations updated.');
+      } catch (error) { button.disabled = false; button.textContent = 'Save allocations'; toast(error.message || 'Allocations could not be saved.'); }
+    });
+  }
+
+  async function updateStatus(orderId, status) {
+    var order = state.orders.find(function (entry) { return entry.id === orderId; });
+    if (!order) return;
+    try {
+      await orderService.updateStatus(orderId, status.toLowerCase().replace(/\s+/g, '_'));
+      await loadRemoteOrders(); renderAdminPage(); toast('Order ' + (order.orderNumber || orderId) + ' updated to ' + status + '.');
+    } catch (error) { toast(error.message || 'Order status could not be updated.'); }
   }
 
   function renderOwnerOrderModal(orderId, activeTab) {
@@ -1546,12 +1646,15 @@
       currentUser = await loadAuthenticatedUser(session.user);
       if (currentUser.role === 'owner' || currentUser.role === 'staff') {
         await loadCatalogueData();
+        await loadRemoteOrders();
         if (currentUser.role === 'owner') await loadManagedAccounts();
         return renderAdmin();
       }
       if (currentUser.role === 'customer') {
         if (state.settings.maintenanceMode) throw new Error('Customer ordering is temporarily under maintenance.');
         await loadCatalogueData();
+        await loadRemoteOrders();
+        await migrateLegacyCartOnce();
         return renderCustomer();
       }
       throw new Error('This account does not have access to the application.');

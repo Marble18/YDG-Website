@@ -194,6 +194,9 @@ td { padding: 12px 10px; border-top: 1px solid #f2ebed; vertical-align: middle; 
 .cart-empty { color: var(--muted); text-align: center; padding: 25px 0; }
 .photo-lightbox { display: grid; place-items: center; margin-top: 18px; border-radius: 12px; overflow: hidden; background: var(--cream); }
 .photo-lightbox img { max-width: 100%; max-height: 70vh; display: block; object-fit: contain; }
+.photo-lightbox.loading img { opacity: 0; max-height: 1px; }
+.photo-lightbox.loading, .photo-lightbox.error { min-height: 220px; color: var(--muted); }
+.photo-lightbox > span { padding: 24px; text-align: center; }
 .customer-menu-backdrop { position: fixed; inset: 0; z-index: 19; background: rgba(26, 14, 20, .36); }
 .customer-menu-panel { position: fixed; z-index: 21; top: 0; right: 0; width: min(360px, 90vw); height: 100vh; padding: 28px; background: white; box-shadow: -18px 0 50px rgba(40, 16, 29, .18); animation: slide-in .2s ease-out; }
 .customer-menu-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding-bottom: 21px; border-bottom: 1px solid var(--line); }

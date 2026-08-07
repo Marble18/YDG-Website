@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-08-05
+Last updated: 2026-08-07
 
 ## 1. Project goal
 
@@ -58,8 +58,8 @@ Database တွင် `profiles`, `categories`, `products`, `orders`, `order_ite
 | Categories/products | Supabase PostgreSQL | Live |
 | Product images | Supabase Storage | Live |
 | Inventory movements | Supabase PostgreSQL | Live |
-| Cart | Browser Local Storage | Migration required |
-| Orders/order items | Mainly browser state | Migration required before real customers |
+| Cart | Supabase `cart_items` through validated RPCs | PR #10 implementation; preview validation required |
+| Orders/order items | Supabase transactional checkout RPC | PR #10 implementation; preview validation required |
 | Customer/staff accounts | Legacy/browser UI is incomplete | Secure server-side flow required |
 | Voucher/settings/maintenance | Browser Local Storage | Migration required |
 | Delivery proofs | Bucket exists | Private upload/access flow required |
@@ -90,6 +90,9 @@ First-version decision:
 - Enforce authorization with RLS plus server-side checks.
 - Product stock update and inventory movement insert must become one database transaction/RPC. They are currently separate client requests and can become inconsistent.
 - Order creation, items, totals and stock reduction must be one server/database transaction.
+- PR #10 database contract treats `order_items.quantity` as the immutable requested quantity and `allocated_quantity` as stock reserved from inventory. Checkout totals use database product prices and requested quantities.
+- Stock-independent ordering accepts shortages. Checkout allocates `least(stock_quantity, requested quantity)`, never makes product stock negative, and records an inventory movement only for the quantity actually allocated.
+- Cart writes and checkout use authenticated, active-customer RPCs. The browser-supplied customer ID, price, unit, minimum, product status and total are never accepted.
 - Delivery proofs stay private; only the related customer and authorized owner/staff may access them.
 - Do not restore authentication, roles or passwords from browser backup JSON.
 - Publishable key is public only with correct RLS/Storage policies; secret/service-role keys are never public.
@@ -98,9 +101,9 @@ First-version decision:
 
 - Supabase built-in email may return `EMAIL RATE LIMIT EXCEEDED`; production recovery needs custom SMTP.
 - Managed-account migration `202608050001` and Edge Functions `username-login` / `account-admin` were deployed to the linked Supabase project on 2026-08-05. Owner username login, customer creation/login, owner-managed password reset, old-password denial, disable denial and re-enable login were manually validated against the deploy preview.
-- Orders, customers, cart, voucher settings and backup flows are not fully migrated from Local Storage.
-- Cart and transactional order migration was moved to PR #9, after the PR #8 catalogue performance work.
-- Inventory writes are not yet transactional.
+- Voucher settings and browser backup flows remain Local Storage features; cart and orders are retired as Local Storage sources of truth by PR #10.
+- Legacy `yt-cart-v3` data is imported once after login only when product IDs are valid, products are active and quantities satisfy current database minimums; the key is then removed.
+- Owner stock allocation changes use a transaction-safe RPC and preserve requested order quantities.
 - README and UI must remain free of usable demo passwords.
 - Browser JSON export is not a production database backup.
 - A purchased custom domain is normally not free; use the Netlify free subdomain until purchasing one.
@@ -120,9 +123,9 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Complete PR #9 deploy-preview manual validation and merge the documented pre-production reset.
-2. Move cart and order submission to Supabase database transactions/RPC in a separately approved follow-up PR.
-3. Complete owner order management and private delivery-proof flow.
+1. Validate and merge PR #10 Supabase cart, transactional ordering and stock-independent allocation.
+2. Complete private delivery-proof Storage flow.
+3. Move remaining voucher/settings and backup behavior away from browser-only state where appropriate.
 4. Add browser/mobile regression checks and a production-grade database plus Storage backup procedure.
 
 ## 10. Validation checklist
@@ -151,3 +154,4 @@ First-version decision:
 - 2026-08-05: PR #7 was merged. Started PR #8 catalogue performance: 20-row database pagination, database category/search filters, stable ordering, lazy images, complete loading/error/empty/count states, catalogue indexes and protected category-wide price adjustment. Cart/orders remains scheduled for PR #9 after PR #8 approval.
 - 2026-08-05: PR #8 merged. PR #9 Phase 1 completed a read-only pre-production audit and local safety snapshot: 22 products, eight categories, one test customer and six product-image objects are proposed for cleanup; owner Auth/profile, schema, policies, functions, settings and project configuration remain protected. No live cleanup has run.
 - 2026-08-05: After explicit confirmation, PR #9 Phase 2 removed the exact audited demo records and Storage objects. Post-cleanup counts are zero for products, categories, inventory, orders, order items, carts and both Storage buckets; only the active primary owner remains, and voucher/app settings remain unchanged. Browser-local demo seed data and legacy commerce keys were retired.
+- 2026-08-07: PR #9 merged as `0bb2752`. PR #10 started on `codex/supabase-cart-transactional-orders`: account-scoped Supabase cart RPCs, idempotent transactional checkout, requested-versus-allocated quantities, shortage-safe stock updates, transactional owner allocation, stricter active-account RLS, one-time stale cart normalization, and accessible photo preview updates were implemented. Local and deploy-preview validation remain before merge.
