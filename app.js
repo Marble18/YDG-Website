@@ -250,7 +250,7 @@
         id: item.id, productId: item.product_id, productName: item.product_name, unit: item.unit,
         unitPrice: Number(item.unit_price), quantity: Number(item.quantity), lineTotal: Number(item.line_total),
         confirmedQuantity: Number(item.confirmed_quantity), confirmedUnitPrice: Number(item.confirmed_unit_price),
-        confirmedLineTotal: Number(item.confirmed_line_total), allocatedQuantity: Number(item.allocated_quantity),
+        confirmedLineTotal: Number(item.confirmed_line_total),
         confirmedPrice: Number(item.confirmed_line_total), picked: Boolean(item.picked)
       }; }),
       total: Number(row.total), confirmedTotal: Number(row.confirmed_total), status: String(row.status || 'pending').replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }),
@@ -1004,10 +1004,10 @@
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order) return;
     var rows = order.items.map(function (item) {
-      return '<tr><td><b>' + esc(item.productName) + '</b><br><small>Requested at ' + money(item.unitPrice) + ' / ' + esc(item.unit) + '</small></td><td>' + item.quantity + '</td><td><input class="qty-input" type="number" min="1" step="1" value="' + item.confirmedQuantity + '" data-confirmed-quantity="' + item.id + '"></td><td><input class="checklist-price-input" type="number" min="0" step="1" value="' + item.confirmedUnitPrice + '" data-confirmed-unit-price="' + item.id + '"></td><td><input class="qty-input" type="number" min="0" max="' + item.confirmedQuantity + '" value="' + item.allocatedQuantity + '" data-allocation="' + item.id + '"></td></tr>';
+      return '<tr><td><b>' + esc(item.productName) + '</b><br><small>Requested at ' + money(item.unitPrice) + ' / ' + esc(item.unit) + '</small></td><td>' + item.quantity + '</td><td><input class="qty-input" type="number" min="1" step="1" value="' + item.confirmedQuantity + '" data-confirmed-quantity="' + item.id + '"></td><td><input class="checklist-price-input" type="number" min="0" step="1" value="' + item.confirmedUnitPrice + '" data-confirmed-unit-price="' + item.id + '"></td></tr>';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">' + esc(order.orderNumber || order.id) + '</p><h2>Order confirmation</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address) + '</b></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><p class="subtext">Requested quantity and price remain unchanged for audit. Confirmed values become payable when status reaches Ready to Ship. Only quantity differences create a customer adjustment notice.</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested qty</th><th>Confirmed qty</th><th>Confirmed unit price</th><th>Stock allocated</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Original total</span><b>' + money(order.total) + '</b></div><div class="cart-total"><span>Confirmed total</span><b>' + money(order.confirmedTotal) + '</b></div><button class="primary full" id="save-allocations">Save confirmation</button>');
-    document.getElementById('save-allocations').addEventListener('click', async function (event) {
+    modal('<div class="modal-head"><div><p class="eyebrow">' + esc(order.orderNumber || order.id) + '</p><h2>Order confirmation</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address) + '</b></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><p class="subtext">Requested quantity and price remain unchanged for audit. Confirmed values become payable when status reaches Ready to Ship. Only quantity differences create a customer adjustment notice.</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested qty</th><th>Confirmed qty</th><th>Confirmed unit price</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Original total</span><b>' + money(order.total) + '</b></div><div class="cart-total"><span>Confirmed total</span><b>' + money(order.confirmedTotal) + '</b></div><button class="primary full" id="save-confirmation">Save confirmation</button>');
+    document.getElementById('save-confirmation').addEventListener('click', async function (event) {
       var button = event.currentTarget; button.disabled = true; button.textContent = 'Saving…';
       try {
         var inputs = Array.from(document.querySelectorAll('[data-confirmed-quantity]'));
@@ -1015,12 +1015,10 @@
           var itemId = inputs[index].dataset.confirmedQuantity;
           var quantity = Number(inputs[index].value);
           var unitPrice = Number(document.querySelector('[data-confirmed-unit-price="' + itemId + '"]').value);
-          var allocation = Number(document.querySelector('[data-allocation="' + itemId + '"]').value);
           if (!Number.isInteger(quantity) || quantity < 1) throw new Error('Confirmed quantities must be positive whole numbers.');
           if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new Error('Confirmed unit prices cannot be negative.');
-          if (!Number.isInteger(allocation) || allocation < 0 || allocation > quantity) throw new Error('Allocated quantity must be between 0 and confirmed quantity.');
           var original = order.items.find(function (item) { return item.id === itemId; });
-          if (quantity !== original.confirmedQuantity || unitPrice !== original.confirmedUnitPrice || allocation !== original.allocatedQuantity) await orderService.confirmItem(original.id, quantity, unitPrice, allocation);
+          if (quantity !== original.confirmedQuantity || unitPrice !== original.confirmedUnitPrice) await orderService.confirmItem(original.id, quantity, unitPrice);
         }
         await loadRemoteOrders(); await loadCatalogueData(); renderAdminPage(); closeModal(); toast('Order confirmation updated.');
       } catch (error) { button.disabled = false; button.textContent = 'Save confirmation'; toast(error.message || 'Order confirmation could not be saved.'); }
