@@ -12,6 +12,7 @@
   var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
   var accountService = window.createAccountService(supabaseClient);
   var productCatalogueService = window.createProductCatalogueService(supabaseClient);
+  var orderService = window.createOrderService(supabaseClient);
   var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
   var currentUser = null;
@@ -21,7 +22,10 @@
   var PAGE_SIZE = 20;
   var customerCatalogue = { items: [], total: 0, search: '', categoryId: '', loading: false, error: '', requestId: 0 };
   var ownerCatalogue = { items: [], total: 0, search: '', categoryId: '', visibility: 'all', loading: false, error: '', requestId: 0 };
+  var ownerOrders = { items: [], total: 0, group: 'active', search: '', counts: { all: 0, pending: 0, active: 0, ready: 0, delivered: 0 }, customerCounts: {}, recent: [], deliveredRevenue: 0, loading: false, error: '', requestId: 0 };
   var dashboardLowStock = { items: [], total: 0, loading: false, error: '' };
+  var remoteCart = [];
+  var checkoutKey = null;
   var THEME_STORAGE = 'yt-theme-v2';
 
   applyTheme(localStorage.getItem(THEME_STORAGE) || 'light');
@@ -171,26 +175,141 @@
   }
 
   function modal(html) {
-    document.getElementById('modal-root').innerHTML = '<div class="modal-backdrop"><div class="modal">' + html + '</div></div>';
+    var root = document.getElementById('modal-root');
+    var previousFocus = document.activeElement;
+    root.innerHTML = '<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">' + html + '</div></div>';
     var close = document.getElementById('close-modal');
     if (close) close.addEventListener('click', closeModal);
+    root._previousFocus = previousFocus;
+    root.querySelector('.modal-backdrop').addEventListener('click', function (event) { if (event.target.classList.contains('modal-backdrop')) closeModal(); });
+    root._escapeHandler = function (event) {
+      if (event.key === 'Escape') return closeModal();
+      if (event.key !== 'Tab') return;
+      var focusable = Array.from(root.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+      if (!focusable.length) return;
+      var first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', root._escapeHandler);
+    if (close) close.focus();
   }
 
   function closeModal() {
     var root = document.getElementById('modal-root');
-    if (root) root.innerHTML = '';
+    if (root) {
+      if (root._escapeHandler) document.removeEventListener('keydown', root._escapeHandler);
+      var previousFocus = root._previousFocus;
+      root.innerHTML = '';
+      if (previousFocus && previousFocus.focus) previousFocus.focus();
+    }
   }
 
   function cart() {
-    try { return JSON.parse(localStorage.getItem(CART_STORAGE) || '[]'); } catch (error) { return []; }
-  }
-
-  function setCart(items) {
-    localStorage.setItem(CART_STORAGE, JSON.stringify(items));
+    return remoteCart.slice();
   }
 
   function cartCount() {
     return cart().reduce(function (sum, item) { return sum + item.quantity; }, 0);
+  }
+
+  async function loadRemoteCart() {
+    var rows = await orderService.listCart();
+    remoteCart = rows.filter(function (row) { return row.products && row.products.is_active; }).map(function (row) {
+      var product = mapDatabaseProduct(Object.assign({}, row.products, { categories: null, category_id: null, stock_quantity: 0 }));
+      mergeProductCache([product]);
+      return { productId: row.product_id, quantity: Number(row.quantity) };
+    });
+  }
+
+  async function migrateLegacyCartOnce() {
+    var raw = localStorage.getItem(CART_STORAGE);
+    if (!raw) return loadRemoteCart();
+    var legacy;
+    try { legacy = JSON.parse(raw); } catch (error) { legacy = []; }
+    if (Array.isArray(legacy)) {
+      var ids = legacy.map(function (item) { return item && item.productId; }).filter(Boolean);
+      var products = ids.length ? (await productCatalogueService.getByIds(ids)).map(mapDatabaseProduct) : [];
+      for (var index = 0; index < legacy.length; index += 1) {
+        var item = legacy[index];
+        var product = products.find(function (entry) { return String(entry.id) === String(item && item.productId); });
+        var quantity = Number(item && item.quantity);
+        if (product && !product.deleted && Number.isInteger(quantity) && quantity >= product.minimumOrderQuantity) {
+          await orderService.setCartItem(product.id, quantity);
+        }
+      }
+    }
+    localStorage.removeItem(CART_STORAGE);
+    await loadRemoteCart();
+  }
+
+  function nullableNumber(value) {
+    return value === null || value === undefined ? null : Number(value);
+  }
+
+  function formatOrderStatus(value) {
+    var status = String(value || 'pending').toLowerCase().replace(/\s+/g, '_');
+    var labels = {
+      pending: 'Pending', approved: 'Approved', review: 'Review', processing: 'Processing',
+      ready_to_ship: 'Ready to Ship', delivered: 'Delivered'
+    };
+    return labels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, function (character) { return character.toUpperCase(); });
+  }
+
+  function mapDatabaseOrder(row) {
+    return {
+      id: row.id, orderNumber: row.order_number || 'Order', customerId: row.customer_id,
+      customer: row.profiles ? (row.profiles.full_name || row.profiles.username) : 'Customer',
+      items: (row.order_items || []).map(function (item) { return {
+        id: item.id, productId: item.product_id, productName: item.product_name, unit: item.unit,
+        unitPrice: Number(item.unit_price), quantity: Number(item.quantity), lineTotal: Number(item.line_total),
+        confirmedQuantity: nullableNumber(item.confirmed_quantity), confirmedUnitPrice: nullableNumber(item.confirmed_unit_price),
+        confirmedLineTotal: nullableNumber(item.confirmed_line_total),
+        confirmedPrice: nullableNumber(item.confirmed_line_total), picked: Boolean(item.picked)
+      }; }),
+      total: Number(row.total), confirmedTotal: nullableNumber(row.confirmed_total), status: formatOrderStatus(row.status),
+      date: new Date(row.created_at).toLocaleDateString('en-GB'), phone: row.contact_phone || '', address: row.delivery_address || '',
+      busStation: row.bus_station || '', deliveryDate: row.preferred_delivery_date || '', note: row.customer_note || '',
+      proofOfDelivery: row.delivery_proof_url || '',
+      adjusted: (row.order_items || []).some(function (item) { return Number(item.confirmed_quantity) !== Number(item.quantity); })
+    };
+  }
+
+  async function loadRemoteOrders() {
+    if (currentUser && (currentUser.role === 'owner' || currentUser.role === 'staff')) return loadOwnerOrders(true);
+    state.orders = (await orderService.listOrders()).map(mapDatabaseOrder);
+  }
+
+  async function loadOwnerOrders(reset) {
+    if (ownerOrders.loading && !reset) return;
+    var requestId = ++ownerOrders.requestId;
+    if (reset) { ownerOrders.items = []; ownerOrders.total = 0; ownerOrders.error = ''; }
+    ownerOrders.loading = true;
+    renderOwnerOrderResults();
+    try {
+      var result = await orderService.listOwnerOrders({
+        group: ownerOrders.group, search: ownerOrders.search,
+        offset: reset ? 0 : ownerOrders.items.length, limit: PAGE_SIZE
+      });
+      if (requestId !== ownerOrders.requestId) return;
+      var mapped = (result.rows || []).map(mapDatabaseOrder);
+      ownerOrders.items = reset ? mapped : ownerOrders.items.concat(mapped);
+      ownerOrders.total = Number(result.count) || 0;
+      ownerOrders.counts = Object.assign({ all: 0, pending: 0, active: 0, ready: 0, delivered: 0 }, result.counts || {});
+      ownerOrders.customerCounts = result.customer_order_counts || {};
+      ownerOrders.recent = (result.recent_rows || []).map(mapDatabaseOrder);
+      ownerOrders.deliveredRevenue = Number(result.delivered_revenue) || 0;
+      ownerOrders.error = '';
+      state.orders = ownerOrders.items;
+    } catch (error) {
+      if (requestId !== ownerOrders.requestId) return;
+      ownerOrders.error = error.message || 'Orders could not be loaded.';
+    } finally {
+      if (requestId === ownerOrders.requestId) {
+        ownerOrders.loading = false;
+        renderOwnerOrderResults();
+      }
+    }
   }
 
   function topbar(hasCart) {
@@ -245,6 +364,7 @@
       unit: row.unit === 'box' ? 'box' : 'pcs',
       minimumOrderQuantity: Number(row.minimum_order_quantity) || 1,
       photo: row.image_url || '',
+      updatedAt: row.updated_at || null,
       bg: '#f3e8ec',
       deleted: !row.is_active
     };
@@ -339,10 +459,12 @@
           throw new Error('Customer ordering is temporarily under maintenance.');
         }
         await loadCatalogueData();
+        await loadRemoteOrders();
         if (currentUser.role === 'owner' || currentUser.role === 'staff') {
           if (currentUser.role === 'owner') await loadManagedAccounts();
           renderAdmin();
         } else {
+          await migrateLegacyCartOnce();
           renderCustomer();
         }
       } catch (error) {
@@ -493,14 +615,13 @@
     grid.innerHTML = products.length ? products.map(function (product) {
       var hasPhoto = /^(data:image\/|https:\/\/)/.test(String(product.photo || ''));
       var photo = hasPhoto ? '<button class="product-photo photo-preview-button" data-preview-photo="' + product.id + '" aria-label="Preview ' + esc(product.name) + '" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</button>' : '<div class="product-photo" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</div>';
-      var canOrder = product.stock >= product.minimumOrderQuantity;
-      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + ' / ' + esc(product.unit) + '</span><span>' + (product.stock ? product.stock + ' in stock · min ' + product.minimumOrderQuantity : 'Out of stock') + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="' + product.minimumOrderQuantity + '" max="' + product.stock + '" value="' + product.minimumOrderQuantity + '" ' + (canOrder ? '' : 'disabled') + '><button class="primary add-to-cart" data-product="' + product.id + '" ' + (canOrder ? '' : 'disabled') + '>Add</button></div></div></article>';
+      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + ' / ' + esc(product.unit) + '</span><span>Minimum ' + product.minimumOrderQuantity + ' ' + esc(product.unit) + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="' + product.minimumOrderQuantity + '" step="1" value="' + product.minimumOrderQuantity + '"><button class="primary add-to-cart" data-product="' + product.id + '">Add</button></div></div></article>';
     }).join('') : '<div class="empty">No matching products found.</div>';
     document.querySelectorAll('[data-product]').forEach(function (button) {
-      button.addEventListener('click', function () { addToCart(Number(button.dataset.product), Number(document.getElementById('qty-' + button.dataset.product).value || 1)); });
+      button.addEventListener('click', function () { addToCart(button.dataset.product, Number(document.getElementById('qty-' + button.dataset.product).value || 1)); });
     });
     document.querySelectorAll('[data-preview-photo]').forEach(function (button) {
-      button.addEventListener('click', function () { renderPhotoPreview(Number(button.dataset.previewPhoto)); });
+      button.addEventListener('click', function () { renderPhotoPreview(button.dataset.previewPhoto); });
     });
     if (customerCatalogue.error) more.innerHTML = '<div class="inline-error">' + esc(customerCatalogue.error) + ' <button class="text-link" id="retry-customer-more">Retry</button></div>';
     else if (customerCatalogue.items.length < customerCatalogue.total) more.innerHTML = '<button class="secondary" id="load-more-products" ' + (customerCatalogue.loading ? 'disabled' : '') + '>' + (customerCatalogue.loading ? 'Loading…' : 'Load more products') + '</button>';
@@ -512,7 +633,10 @@
   function renderPhotoPreview(productId) {
     var product = getProduct(productId);
     if (!product || !/^(data:image\/|https:\/\/)/.test(String(product.photo || ''))) return;
-    modal('<div class="modal-head"><div><p class="eyebrow">Product photo</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><div class="photo-lightbox"><img src="' + esc(product.photo) + '" alt="' + esc(product.name) + '"></div>');
+    modal('<div class="modal-head"><div><p class="eyebrow">Product photo</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" aria-label="Close photo preview">×</button></div><div class="photo-lightbox loading" id="photo-lightbox"><span>Loading image…</span><img src="' + esc(product.photo) + '" alt="' + esc(product.name) + '"></div>');
+    var image = document.querySelector('#photo-lightbox img');
+    image.addEventListener('load', function () { image.parentElement.classList.remove('loading'); });
+    image.addEventListener('error', function () { image.parentElement.className = 'photo-lightbox error'; image.parentElement.innerHTML = '<span>Photo could not be loaded.</span>'; });
   }
 
   function renderCustomerMenu() {
@@ -538,23 +662,24 @@
 
   function renderRecentOrderResults(query) {
     var search = String(query || '').toLowerCase().replace('#', '');
-    var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id && ('yt-' + order.id).indexOf(search) > -1; }).sort(function (a, b) { return b.id - a.id; });
-    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
-    document.querySelectorAll('[data-menu-order-details]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(Number(button.dataset.menuOrderDetails)); }); });
-    document.querySelectorAll('[data-menu-order-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.menuOrderVoucher)); }); });
+    var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id && String(order.orderNumber || '').toLowerCase().indexOf(search) > -1; });
+    document.getElementById('recent-order-results').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">' + esc(order.orderNumber || 'Order') + '</td><td>' + order.date + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-menu-order-details="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-menu-order-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">No order matches that Order ID.</div>';
+    document.querySelectorAll('[data-menu-order-details]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(button.dataset.menuOrderDetails); }); });
+    document.querySelectorAll('[data-menu-order-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.menuOrderVoucher); }); });
   }
 
-  function addToCart(productId, quantity) {
+  async function addToCart(productId, quantity) {
     var product = getProduct(productId);
-    if (!product || product.stock < product.minimumOrderQuantity) return;
-    quantity = Math.max(product.minimumOrderQuantity, Math.min(product.stock, Number(quantity) || product.minimumOrderQuantity));
-    var items = cart();
-    var line = items.find(function (item) { return item.productId === productId; });
-    if (line) line.quantity = Math.min(product.stock, line.quantity + quantity);
-    else items.push({ productId: productId, quantity: quantity });
-    setCart(items);
-    document.querySelector('.cart-count').textContent = cartCount();
-    toast(product.name + ' added to cart.');
+    if (!product) return;
+    quantity = Number(quantity);
+    if (!Number.isInteger(quantity) || quantity < product.minimumOrderQuantity) return toast('Enter at least the minimum whole-number quantity.');
+    var existing = cart().find(function (item) { return String(item.productId) === String(productId); });
+    try {
+      await orderService.setCartItem(productId, (existing ? existing.quantity : 0) + quantity);
+      await loadRemoteCart();
+      document.querySelector('.cart-count').textContent = cartCount();
+      toast(product.name + ' added to cart.');
+    } catch (error) { toast(error.message || 'Item could not be added.'); }
   }
 
   function cartLines() {
@@ -570,49 +695,52 @@
 
   async function renderCart() {
     try {
+      await loadRemoteCart();
       await ensureCachedProducts(cart().map(function (line) { return line.productId; }));
     } catch (error) {
       toast(error.message || 'Cart products could not be refreshed.');
     }
     var items = cartLines();
-    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' / ' + esc(line.product.unit) + ' · minimum ' + line.product.minimumOrderQuantity + '</span></div><input type="number" min="' + line.product.minimumOrderQuantity + '" max="' + line.product.stock + '" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
+    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' / ' + esc(line.product.unit) + ' · minimum ' + line.product.minimumOrderQuantity + '</span></div><input type="number" min="' + line.product.minimumOrderQuantity + '" step="1" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
     document.querySelectorAll('[data-cart-quantity]').forEach(function (input) {
-      input.addEventListener('change', function () {
-        var items = cart();
-        var item = items.find(function (entry) { return entry.productId === Number(input.dataset.cartQuantity); });
+      input.addEventListener('change', async function () {
+        var item = cart().find(function (entry) { return String(entry.productId) === input.dataset.cartQuantity; });
         var product = getProduct(item.productId);
-        item.quantity = Math.max(product.minimumOrderQuantity, Math.min(product.stock, Number(input.value) || product.minimumOrderQuantity));
-        setCart(items);
-        renderCart();
+        var quantity = Number(input.value);
+        if (!Number.isInteger(quantity) || quantity < product.minimumOrderQuantity) return toast('Quantity is below the product minimum.');
+        try { await orderService.setCartItem(item.productId, quantity); await renderCart(); } catch (error) { toast(error.message || 'Cart could not be updated.'); }
       });
     });
     document.querySelectorAll('[data-remove-cart]').forEach(function (button) {
-      button.addEventListener('click', function () { setCart(cart().filter(function (line) { return line.productId !== Number(button.dataset.removeCart); })); renderCart(); document.querySelector('.cart-count').textContent = cartCount(); });
+      button.addEventListener('click', async function () { try { await orderService.removeCartItem(button.dataset.removeCart); await renderCart(); document.querySelector('.cart-count').textContent = cartCount(); } catch (error) { toast(error.message || 'Item could not be removed.'); } });
     });
     var checkout = document.getElementById('checkout');
     if (checkout) checkout.addEventListener('click', renderCheckout);
   }
 
   function renderCheckout() {
+    checkoutKey = checkoutKey || crypto.randomUUID();
     modal('<form id="checkout-form"><div class="modal-head"><div><p class="eyebrow">Final step</p><h2>Confirm your order</h2></div><button class="icon-btn" type="button" id="close-modal">×</button></div><p class="subtext">No online payment is needed. The shop will review and approve this order.</p><div class="form-grid"><label class="field">Contact phone<input name="phone" required placeholder="09xxxxxxxxx"></label><label class="field">Preferred delivery date<input name="deliveryDate" type="date"></label><label class="field full-field">Delivery address / လိပ်စာ<input name="address" required placeholder="House / Street / Township / City"></label><label class="field full-field">Bus station name / ကားဂိတ်အမည် (optional)<input name="busStation" placeholder="For out-of-town customer orders only"></label><label class="field full-field">Order note (optional)<input name="note"></label></div><div class="two-button"><button class="secondary" type="button" id="back-to-cart">Back</button><button class="primary" type="submit">Submit order</button></div></form>');
     document.getElementById('back-to-cart').addEventListener('click', renderCart);
     document.getElementById('checkout-form').addEventListener('submit', submitOrder);
   }
 
-  function submitOrder(event) {
+  async function submitOrder(event) {
     event.preventDefault();
     var lines = cartLines();
     if (!lines.length) return;
-    if (lines.some(function (line) { return line.quantity > line.product.stock; })) return toast('Stock has changed. Please update the cart.');
     var data = new FormData(event.target);
-    var id = Math.max.apply(null, state.orders.map(function (order) { return order.id; })) + 1;
-    var total = lines.reduce(function (sum, line) { return sum + line.product.price * line.quantity; }, 0);
-    lines.forEach(function (line) {
-      line.product.stock -= line.quantity;
-      state.inventory.unshift({ id: Date.now() + line.product.id, productId: line.product.id, product: line.product.name, type: 'OUT', quantity: line.quantity, date: today(), note: 'Order #YT-' + id });
-    });
-    state.orders.unshift({ id: id, customerId: currentUser.id, customer: currentUser.name, items: lines.map(function (line) { return { productId: line.product.id, quantity: line.quantity, unitPrice: line.product.price }; }), total: total, status: 'Pending', date: today(), phone: data.get('phone') || '', address: data.get('address') || '', busStation: data.get('busStation') || '', deliveryDate: data.get('deliveryDate') || '', note: data.get('note') || '', adjusted: false });
-    saveState(); setCart([]); closeModal(); renderCustomer(); toast('Order #YT-' + id + ' was submitted successfully.');
+    var button = event.target.querySelector('button[type="submit"]');
+    button.disabled = true; button.textContent = 'Submitting…';
+    try {
+      var result = await orderService.checkout({ idempotencyKey: checkoutKey, phone: data.get('phone'), address: data.get('address'), busStation: data.get('busStation'), deliveryDate: data.get('deliveryDate'), note: data.get('note') });
+      checkoutKey = null;
+      await loadRemoteCart(); await loadRemoteOrders();
+      closeModal(); renderCustomer(); toast('Order ' + result[0].order_number + ' was submitted successfully.');
+    } catch (error) {
+      button.disabled = false; button.textContent = 'Submit order';
+      toast(error.message || 'Order could not be submitted. Your cart is unchanged.');
+    }
   }
 
   function statusClass(status) {
@@ -628,25 +756,28 @@
   }
 
   function orderCount(order) {
-    return order.items.reduce(function (sum, line) { return sum + line.quantity; }, 0) + ' item(s)';
+    return order.items.reduce(function (sum, item) { return sum + visibleQuantity(order, item); }, 0) + ' item(s)';
   }
 
   function renderCustomerOrders() {
     var orders = state.orders.filter(function (order) { return order.customerId === currentUser.id; }).sort(function (a, b) { return b.id - a.id; });
-    document.getElementById('customer-orders').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">#YT-' + order.id + (order.adjusted ? '<br><small>Qty updated by shop</small>' : '') + '</td><td>' + order.date + '</td><td>' + orderCount(order) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-view-order="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-customer-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">You have not placed an order yet.</div>';
-    document.querySelectorAll('[data-view-order]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(Number(button.dataset.viewOrder)); }); });
-    document.querySelectorAll('[data-customer-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.customerVoucher)); }); });
+    document.getElementById('customer-orders').innerHTML = orders.length ? '<table><thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody>' + orders.map(function (order) { return '<tr><td class="order-id">' + esc(order.orderNumber || 'Order') + '</td><td>' + order.date + '</td><td>' + orderCount(order) + '</td><td>' + badge(order.status) + '</td><td><div class="action-row"><button class="table-action" data-view-order="' + order.id + '">Details</button>' + (voucherAvailable(order) ? '<button class="table-action" data-customer-voucher="' + order.id + '">Voucher</button>' : '') + '</div></td></tr>'; }).join('') + '</tbody></table>' : '<div class="cart-empty">You have not placed an order yet.</div>';
+    document.querySelectorAll('[data-view-order]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(button.dataset.viewOrder); }); });
+    document.querySelectorAll('[data-customer-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.customerVoucher); }); });
   }
 
   function renderOrderDetails(orderId) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order || (currentUser.role !== 'owner' && order.customerId !== currentUser.id)) return;
     var isCustomer = currentUser.role === 'customer';
+    var quantityNotices = order.items.filter(function (item) { return item.confirmedQuantity !== item.quantity; }).map(function (item) {
+      return '<div>Shop adjusted quantity from ' + item.quantity + ' to ' + item.confirmedQuantity + ' for ' + esc(item.productName) + '.</div>';
+    }).join('');
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
-      return product ? '<tr><td>' + esc(product.name) + '</td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td></tr>' : '';
+      return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>#YT-' + order.id + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (order.adjusted ? '<div class="order-alert">The shop updated the available quantity. ' + (isCustomer ? 'Your confirmed quantities are shown below.' : 'The total below reflects the confirmed quantities.') + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Confirmed qty</th><th>' + (isCustomer ? 'Price' : 'Total') + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + (isCustomer ? '' : '<div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>') + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
+    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
     var viewVoucher = document.getElementById('view-voucher');
     if (viewVoucher) viewVoucher.addEventListener('click', function () { renderVoucher(order.id); });
   }
@@ -668,10 +799,10 @@
   }
 
   function dashboardPage() {
-    var pending = state.orders.filter(function (order) { return order.status === 'Pending'; }).length;
-    var revenue = state.orders.filter(function (order) { return order.status === 'Delivered'; }).reduce(function (sum, order) { return sum + order.total; }, 0);
+    var pending = Number(ownerOrders.counts.pending) || 0;
+    var revenue = ownerOrders.deliveredRevenue;
     var customers = state.users.filter(function (user) { return user.role === 'customer' && user.status === 'Active'; }).length;
-    return '<div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Good morning, Owner</h1><p>Review new orders and keep stock ready for shipping.</p></div><button class="primary" data-go="orders">View orders</button></div><section class="dashboard-stats">' + stat('New orders', pending, pending ? 'Needs your review' : 'All caught up') + stat('Delivered revenue', money(revenue), 'Delivered orders') + stat('Active customers', customers, 'Owner-managed accounts') + '<article class="stat-card"><div class="stat-label">Low stock items</div><div class="stat-value" id="low-stock-count">...</div><div class="stat-change" id="low-stock-note">Checking stock levels</div></article></section><section class="admin-grid"><div class="panel"><h2 class="panel-title">Recent orders <button class="text-link" data-go="orders">View all</button></h2>' + adminOrderTable(state.orders.slice().sort(function (a, b) { return b.id - a.id; }).slice(0, 5), false) + '</div><div class="panel"><h2 class="panel-title">Low stock</h2><div id="dashboard-low-stock" aria-busy="true">' + productSkeletons(3) + '</div></div></section>';
+    return '<div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Good morning, Owner</h1><p>Review new orders and keep stock ready for shipping.</p></div><button class="primary" data-go="orders">View orders</button></div><section class="dashboard-stats">' + stat('New orders', pending, pending ? 'Needs your review' : 'All caught up') + stat('Delivered revenue', money(revenue), 'Delivered orders') + stat('Active customers', customers, 'Owner-managed accounts') + '<article class="stat-card"><div class="stat-label">Low stock items</div><div class="stat-value" id="low-stock-count">...</div><div class="stat-change" id="low-stock-note">Checking stock levels</div></article></section><section class="admin-grid"><div class="panel"><h2 class="panel-title">Recent orders <button class="text-link" data-go="orders">View all</button></h2>' + adminOrderTable(ownerOrders.recent, false) + '</div><div class="panel"><h2 class="panel-title">Low stock</h2><div id="dashboard-low-stock" aria-busy="true">' + productSkeletons(3) + '</div></div></section>';
   }
 
   async function loadDashboardLowStock() {
@@ -709,31 +840,57 @@
   }
 
   function ordersPage() {
-    return '<div class="page-heading"><div><p class="eyebrow">Order management</p><h1>Orders</h1><p>Adjust confirmed quantities, move orders through delivery, and upload proof of delivery.</p></div></div><div class="panel owner-search-panel"><input class="search" id="owner-order-search" placeholder="Search Order ID or customer name..."></div><div class="panel table-wrap" id="owner-order-results">' + adminOrderTable(state.orders.slice().sort(function (a, b) { return b.id - a.id; }), true) + '</div>';
+    var groups = [
+      { id: 'active', label: 'Active Orders' }, { id: 'ready', label: 'Ready to Ship' },
+      { id: 'delivered', label: 'Delivered' }, { id: 'all', label: 'All Orders' }
+    ];
+    var tabs = groups.map(function (group) {
+      return '<button class="order-filter-tab ' + (ownerOrders.group === group.id ? 'active' : '') + '" type="button" role="tab" aria-selected="' + (ownerOrders.group === group.id ? 'true' : 'false') + '" data-order-group="' + group.id + '">' + group.label + ' <span data-order-group-count="' + group.id + '">' + Number(ownerOrders.counts[group.id] || 0) + '</span></button>';
+    }).join('');
+    return '<div class="page-heading"><div><p class="eyebrow">Order management</p><h1>Orders</h1><p>Review requested quantities and move orders through delivery.</p></div></div><div class="order-filter-tabs" role="tablist" aria-label="Order status groups">' + tabs + '</div><div class="panel owner-search-panel"><label class="field">Search orders<input class="search" id="owner-order-search" value="' + esc(ownerOrders.search) + '" placeholder="YT-260807-0001 or customer name" autocomplete="off"></label></div><div class="catalogue-result-heading"><span id="owner-order-count" aria-live="polite"></span></div><div class="panel table-wrap" id="owner-order-results" aria-busy="true"></div><div class="catalogue-more" id="owner-order-more"></div>';
   }
 
   function adminOrderTable(orders, editable) {
     if (!orders.length) return '<div class="cart-empty">No orders yet.</div>';
-    var statuses = ['Pending', 'Approved', 'Processing', 'Ready to Ship', 'Delivered'];
     return '<table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th>' + (editable ? '<th>Action</th>' : '') + '</tr></thead><tbody>' + orders.map(function (order) {
-      var control = editable ? '<select class="status-select" data-status="' + order.id + '">' + statuses.map(function (status) { return '<option value="' + status + '" ' + (order.status === status ? 'selected' : '') + '>' + status + '</option>'; }).join('') + '</select>' : badge(order.status);
-      return '<tr><td><span class="order-id">#YT-' + order.id + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(order.total) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
+      var nextStatuses = { Pending: 'Approved', Approved: 'Processing', Processing: 'Ready to Ship', 'Ready to Ship': 'Delivered' };
+      var nextStatus = nextStatuses[order.status];
+      var control = editable ? '<select class="status-select" aria-label="Status for ' + esc(order.orderNumber) + '" data-status="' + order.id + '" ' + (!nextStatus ? 'disabled' : '') + '><option value="' + esc(order.status) + '" selected>' + esc(order.status) + '</option>' + (nextStatus ? '<option value="' + nextStatus + '">' + nextStatus + '</option>' : '') + '</select>' : badge(order.status);
+      return '<tr><td><span class="order-id">' + esc(order.orderNumber || 'Order') + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(visibleOrderTotal(order)) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
     }).join('') + '</tbody></table>';
   }
 
-  function matchingOwnerOrders(query) {
-    var term = String(query || '').trim().toLowerCase();
-    var idTerm = term.replace(/\D/g, '');
-    return state.orders.slice().sort(function (a, b) { return b.id - a.id; }).filter(function (order) {
-      return !term || String(order.customer || '').toLowerCase().indexOf(term) !== -1 || (idTerm && String(order.id).indexOf(idTerm) !== -1) || ('yt-' + order.id).indexOf(term.replace('#', '')) !== -1;
-    });
+  function renderOwnerOrderResults() {
+    var results = document.getElementById('owner-order-results');
+    var count = document.getElementById('owner-order-count');
+    var more = document.getElementById('owner-order-more');
+    if (!results || !count || !more) return;
+    document.querySelectorAll('[data-order-group-count]').forEach(function (badge) { badge.textContent = Number(ownerOrders.counts[badge.dataset.orderGroupCount] || 0); });
+    count.textContent = ownerOrders.loading && !ownerOrders.items.length ? 'Loading orders…' : 'Showing ' + ownerOrders.items.length + ' of ' + ownerOrders.total + ' order(s)';
+    results.setAttribute('aria-busy', ownerOrders.loading ? 'true' : 'false');
+    if (ownerOrders.loading && !ownerOrders.items.length) {
+      results.innerHTML = '<div class="table-skeleton">' + Array.from({ length: 6 }).map(function () { return '<div class="skeleton-row"><span></span><span></span><span></span><span></span></div>'; }).join('') + '</div>';
+      more.innerHTML = ''; return;
+    }
+    if (ownerOrders.error && !ownerOrders.items.length) {
+      results.innerHTML = '<div class="empty catalogue-error"><b>Orders could not be loaded.</b><span>' + esc(ownerOrders.error) + '</span><button class="secondary" id="retry-owner-orders">Try again</button></div>';
+      more.innerHTML = '';
+      document.getElementById('retry-owner-orders').addEventListener('click', function () { loadOwnerOrders(true); }); return;
+    }
+    results.innerHTML = ownerOrders.items.length ? adminOrderTable(ownerOrders.items, currentUser.role === 'owner') : '<div class="empty">No matching orders found in this group.</div>';
+    bindOrderTableActions(results);
+    if (ownerOrders.error) more.innerHTML = '<div class="inline-error">' + esc(ownerOrders.error) + ' <button class="text-link" id="retry-owner-orders-more">Retry</button></div>';
+    else if (ownerOrders.items.length < ownerOrders.total) more.innerHTML = '<button class="secondary" id="load-more-owner-orders" ' + (ownerOrders.loading ? 'disabled' : '') + '>' + (ownerOrders.loading ? 'Loading…' : 'Load more orders') + '</button>';
+    else more.innerHTML = ownerOrders.items.length ? '<span>All matching orders are shown.</span>' : '';
+    var retry = document.getElementById('retry-owner-orders-more'); if (retry) retry.addEventListener('click', function () { loadOwnerOrders(false); });
+    var loadMore = document.getElementById('load-more-owner-orders'); if (loadMore) loadMore.addEventListener('click', function () { loadOwnerOrders(false); });
   }
 
   function bindOrderTableActions(scope) {
     var root = scope || document;
-    root.querySelectorAll('[data-status]').forEach(function (select) { select.addEventListener('change', function () { updateStatus(Number(select.dataset.status), select.value); }); });
-    root.querySelectorAll('[data-owner-order-view]').forEach(function (button) { button.addEventListener('click', function () { renderOwnerOrderModal(Number(button.dataset.ownerOrderView), 'view'); }); });
-    root.querySelectorAll('[data-owner-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(Number(button.dataset.ownerVoucher)); }); });
+    root.querySelectorAll('[data-status]').forEach(function (select) { select.addEventListener('change', function () { updateStatus(select.dataset.status, select.value); }); });
+    root.querySelectorAll('[data-owner-order-view]').forEach(function (button) { button.addEventListener('click', function () { renderTransactionalOwnerOrderModal(button.dataset.ownerOrderView); }); });
+    root.querySelectorAll('[data-owner-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.ownerVoucher); }); });
   }
 
   function productsPage() {
@@ -798,7 +955,7 @@
     results.innerHTML = products.length ? '<table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) {
       var status = product.deleted ? '<span class="badge disabled">Inactive</span>' : '<span class="badge active">Active</span>';
       var availabilityAction = product.deleted ? '<button class="table-action" data-reactivate-product="' + product.id + '">Reactivate</button>' : '<button class="table-action delete-action" data-delete-product="' + product.id + '">Deactivate</button>';
-      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button><button class="table-action" data-manual-stock="' + product.id + '">Adjust stock</button>' + availabilityAction + '</div></td></tr>';
+      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button>' + availabilityAction + '</div></td></tr>';
     }).join('') + '</tbody></table>' : '<div class="empty">No matching products found.</div>';
     bindProductTableActions(results);
     if (ownerCatalogue.error) more.innerHTML = '<div class="inline-error">' + esc(ownerCatalogue.error) + ' <button class="text-link" id="retry-owner-more">Retry</button></div>';
@@ -810,7 +967,6 @@
 
   function bindProductTableActions(root) {
     root.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(button.dataset.editProduct); }); });
-    root.querySelectorAll('[data-manual-stock]').forEach(function (button) { button.addEventListener('click', function () { renderManualStockAdjust(button.dataset.manualStock); }); });
     root.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(button.dataset.deleteProduct); }); });
     root.querySelectorAll('[data-reactivate-product]').forEach(function (button) { button.addEventListener('click', function () { reactivateProduct(button.dataset.reactivateProduct); }); });
   }
@@ -825,7 +981,7 @@
 
   function customersPage() {
     var customers = state.users.filter(function (user) { return user.role === 'customer'; });
-    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Customer accounts</h1><p>Create accounts, control access and reset customer passwords.</p></div><button class="primary" id="new-customer">+ Create customer account</button></div><div class="panel table-wrap"><table><thead><tr><th>Customer</th><th>Username</th><th>Orders</th><th>Access</th><th>Action</th></tr></thead><tbody>' + customers.map(function (customer) { return '<tr><td><b>' + esc(customer.name) + '</b></td><td>' + esc(customer.username) + '</td><td>' + state.orders.filter(function (order) { return String(order.customerId) === String(customer.id); }).length + '</td><td>' + badge(customer.status) + '</td><td><div class="action-row"><button class="table-action" data-toggle-account="' + customer.id + '">' + (customer.status === 'Active' ? 'Disable' : 'Enable') + '</button><button class="table-action" data-reset-account="' + customer.id + '">Reset password</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Customer accounts</h1><p>Create accounts, control access and reset customer passwords.</p></div><button class="primary" id="new-customer">+ Create customer account</button></div><div class="panel table-wrap"><table><thead><tr><th>Customer</th><th>Username</th><th>Orders</th><th>Access</th><th>Action</th></tr></thead><tbody>' + customers.map(function (customer) { return '<tr><td><b>' + esc(customer.name) + '</b></td><td>' + esc(customer.username) + '</td><td>' + Number(ownerOrders.customerCounts[String(customer.id)] || 0) + '</td><td>' + badge(customer.status) + '</td><td><div class="action-row"><button class="table-action" data-toggle-account="' + customer.id + '">' + (customer.status === 'Active' ? 'Disable' : 'Enable') + '</button><button class="table-action" data-reset-account="' + customer.id + '">Reset password</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
   }
 
   function ownersPage() {
@@ -866,11 +1022,18 @@
     }
     if (document.getElementById('dashboard-low-stock')) loadDashboardLowStock();
     var ownerOrderSearch = document.getElementById('owner-order-search');
-    if (ownerOrderSearch) ownerOrderSearch.addEventListener('input', function () {
-      var results = document.getElementById('owner-order-results');
-      results.innerHTML = adminOrderTable(matchingOwnerOrders(ownerOrderSearch.value), true);
-      bindOrderTableActions(results);
-    });
+    if (ownerOrderSearch) {
+      ownerOrderSearch.addEventListener('input', debounce(function (event) { ownerOrders.search = event.target.value.trim(); loadOwnerOrders(true); }, 350));
+      document.querySelectorAll('[data-order-group]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          if (ownerOrders.group === button.dataset.orderGroup) return;
+          ownerOrders.group = button.dataset.orderGroup;
+          ownerOrders.items = []; ownerOrders.total = 0; ownerOrders.error = '';
+          renderAdminPage(); loadOwnerOrders(true);
+        });
+      });
+      renderOwnerOrderResults();
+    }
     ['voucher-title', 'voucher-color', 'voucher-footer'].forEach(function (id) { var input = document.getElementById(id); if (input) input.addEventListener('input', renderLiveVoucherPreview); });
   }
 
@@ -917,12 +1080,69 @@
     });
   }
 
-  function updateStatus(orderId, status) {
+  function renderTransactionalOwnerOrderModal(orderId) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order) return;
-    if (status === 'Delivered' && !order.proofOfDelivery) return renderProofForm(orderId);
+    var rows = order.items.map(function (item) {
+      return '<tr><td><b>' + esc(item.productName) + '</b><br><small>Requested at ' + money(item.unitPrice) + ' / ' + esc(item.unit) + '</small></td><td>' + item.quantity + '</td><td><input class="qty-input" type="number" min="1" step="1" value="' + item.confirmedQuantity + '" data-confirmed-quantity="' + item.id + '"></td><td><input class="checklist-price-input" type="number" min="0" step="1" value="' + item.confirmedUnitPrice + '" data-confirmed-unit-price="' + item.id + '"></td></tr>';
+    }).join('');
+    modal('<div class="modal-head"><div><p class="eyebrow">' + esc(order.orderNumber || order.id) + '</p><h2>Order confirmation</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address) + '</b></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><p class="subtext">Requested quantity and price remain unchanged for audit. Confirmed values become payable when status reaches Ready to Ship. Only quantity differences create a customer adjustment notice.</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested qty</th><th>Confirmed qty</th><th>Confirmed unit price</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Original total</span><b>' + money(order.total) + '</b></div><div class="cart-total"><span>Confirmed total</span><b>' + money(order.confirmedTotal) + '</b></div><button class="primary full" id="save-confirmation">Save confirmation</button>');
+    document.getElementById('save-confirmation').addEventListener('click', async function (event) {
+      var button = event.currentTarget; button.disabled = true; button.textContent = 'Saving…';
+      try {
+        var inputs = Array.from(document.querySelectorAll('[data-confirmed-quantity]'));
+        for (var index = 0; index < inputs.length; index += 1) {
+          var itemId = inputs[index].dataset.confirmedQuantity;
+          var quantity = Number(inputs[index].value);
+          var unitPrice = Number(document.querySelector('[data-confirmed-unit-price="' + itemId + '"]').value);
+          if (!Number.isInteger(quantity) || quantity < 1) throw new Error('Confirmed quantities must be positive whole numbers.');
+          if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new Error('Confirmed unit prices cannot be negative.');
+          var original = order.items.find(function (item) { return item.id === itemId; });
+          if (quantity !== original.confirmedQuantity || unitPrice !== original.confirmedUnitPrice) await orderService.confirmItem(original.id, quantity, unitPrice);
+        }
+        await loadRemoteOrders(); await loadCatalogueData(); renderAdminPage(); closeModal(); toast('Order confirmation updated.');
+      } catch (error) { button.disabled = false; button.textContent = 'Save confirmation'; toast(error.message || 'Order confirmation could not be saved.'); }
+    });
+  }
+
+  function usesConfirmedValues(order) {
+    return order.status === 'Ready to Ship' || order.status === 'Delivered';
+  }
+
+  function visibleQuantity(order, item) {
+    return usesConfirmedValues(order) && item.confirmedQuantity !== null && item.confirmedQuantity !== undefined
+      ? item.confirmedQuantity : item.quantity;
+  }
+
+  function visibleUnitPrice(order, item) {
+    return usesConfirmedValues(order) && item.confirmedUnitPrice !== null && item.confirmedUnitPrice !== undefined
+      ? item.confirmedUnitPrice : item.unitPrice;
+  }
+
+  function visibleLineTotal(order, item) {
+    return usesConfirmedValues(order) && item.confirmedLineTotal !== null && item.confirmedLineTotal !== undefined
+      ? item.confirmedLineTotal : item.lineTotal;
+  }
+
+  function visibleOrderTotal(order) {
+    return usesConfirmedValues(order) && order.confirmedTotal !== null && order.confirmedTotal !== undefined
+      ? order.confirmedTotal : order.total;
+  }
+
+  async function updateStatus(orderId, status) {
+    var order = state.orders.find(function (entry) { return entry.id === orderId; });
+    if (!order) return;
+    var previousStatus = order.status;
     order.status = status;
-    saveState(); renderAdminPage(); toast('Order #YT-' + orderId + ' updated to ' + status + '.');
+    renderOwnerOrderResults();
+    try {
+      await orderService.updateStatus(orderId, status.toLowerCase().replace(/\s+/g, '_'));
+      await loadOwnerOrders(true); renderAdminPage(); toast('Order ' + (order.orderNumber || '') + ' updated to ' + status + '.');
+    } catch (error) {
+      order.status = previousStatus;
+      renderOwnerOrderResults();
+      toast(error.message || 'Order status could not be updated.');
+    }
   }
 
   function renderOwnerOrderModal(orderId, activeTab) {
@@ -935,7 +1155,7 @@
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
       if (!product) return '';
-      if (!showChecklist) return '<tr><td><b>' + esc(product.name) + '</b></td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td><td><span class="pick-mark ' + (item.picked ? '' : 'pick-pending') + '">' + (item.picked ? 'Picked' : 'Not checked') + '</span></td></tr>';
+      if (!showChecklist) return '<tr><td><b>' + esc(product.name) + '</b></td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td><td><span class="pick-mark ' + (item.picked ? '' : 'pick-pending') + '">' + (item.picked ? 'Picked' : 'Not checked') + '</span></td></tr>';
       return '<tr><td><b>' + esc(product.name) + '</b><br><small>Unit price: ' + money(itemPrice(item)) + '</small></td><td><input class="qty-input" name="qty-' + product.id + '" data-checklist-qty="' + product.id + '" data-unit-price="' + itemPrice(item) + '" type="number" min="1" max="' + (product.stock + item.quantity) + '" value="' + item.quantity + '"><br><small>Available: ' + (product.stock + item.quantity) + '</small></td><td><input class="qty-input checklist-price-input" name="price-' + product.id + '" data-checklist-price="' + product.id + '" data-manual-price="' + (item.confirmedPrice !== undefined && item.confirmedPrice !== null ? 'true' : '') + '" type="number" min="0" step="1" value="' + lineTotal(item) + '"></td><td><label class="check-item"><input name="picked-' + product.id + '" type="checkbox" ' + (item.picked ? 'checked' : '') + '> Picked</label></td></tr>';
     }).join('');
     if (showAdjust) {
@@ -972,7 +1192,7 @@
       return;
     }
     var content = !showChecklist
-      ? '<div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Order view</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div>' + tabs + details + (order.adjusted ? '<div class="order-alert">The confirmed quantity was updated. The customer can see the revised item quantities.</div>' : '') + '<div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Total</th><th>Pick list</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>'
+      ? '<div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Order view</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div>' + tabs + details + (order.adjusted ? '<div class="order-alert">The confirmed quantity was updated. The customer can see the revised item quantities.</div>' : '') + '<div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Total</th><th>Pick list</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(visibleOrderTotal(order)) + '</b></div>'
       : '<form id="owner-checklist-form"><div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Check list</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div>' + tabs + '<p class="subtext">Adjust the quantity and tick Picked in the same list. Saving records that item\'s current quantity and price as its confirmed order value.</p>' + details + '<div class="table-wrap"><table><thead><tr><th>Item</th><th>Confirmed qty</th><th>Confirmed price</th><th>Picked</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="two-button"><button class="primary" type="submit">Save check list</button></div></form>';
     modal(content);
     document.querySelectorAll('[data-owner-order-tab]').forEach(function (button) { button.addEventListener('click', function () { renderOwnerOrderModal(order.id, button.dataset.ownerOrderTab); }); });
@@ -1194,7 +1414,18 @@
         }
         var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: photo || null, is_active: product ? !product.deleted : true };
         var result = product
-          ? await supabaseClient.from('products').update(values).eq('id', product.id)
+          ? await supabaseClient.rpc('update_product_with_stock', {
+            p_product_id: product.id,
+            p_expected_updated_at: product.updatedAt,
+            p_name: values.name,
+            p_category_id: values.category_id,
+            p_price: values.price,
+            p_stock_quantity: values.stock_quantity,
+            p_unit: values.unit,
+            p_minimum_order_quantity: values.minimum_order_quantity,
+            p_image_url: values.image_url,
+            p_is_active: values.is_active
+          })
           : await supabaseClient.from('products').insert(values);
         if (result.error) throw result.error;
         await refreshCataloguePage('Product saved to the database.');
@@ -1203,36 +1434,6 @@
         submitButton.disabled = false;
         submitButton.textContent = 'Save product';
       }
-    });
-  }
-
-  function renderManualStockAdjust(productId) {
-    var product = getProduct(productId);
-    if (!product || product.deleted) return;
-    modal('<form id="manual-stock-form"><div class="modal-head"><div><p class="eyebrow">Manual stock adjustment</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Set the exact current stock quantity. The system will automatically add an IN or OUT inventory record for the difference.</p><div class="form-grid"><label class="field">Current stock<input value="' + product.stock + '" disabled></label><label class="field">New stock quantity<input name="newStock" type="number" min="0" step="1" required value="' + product.stock + '"></label><label class="field full-field">Adjustment note<input name="note" placeholder="Stock count, damaged items, correction..."></label></div><div class="two-button"><button class="primary" type="submit">Save stock adjustment</button></div></form>');
-    document.getElementById('manual-stock-form').addEventListener('submit', async function (event) {
-      event.preventDefault();
-      var data = new FormData(event.target);
-      var newStock = Number(data.get('newStock'));
-      if (!Number.isInteger(newStock) || newStock < 0) return toast('Enter a whole stock quantity of 0 or more.');
-      var difference = newStock - product.stock;
-      try {
-        var update = await supabaseClient.from('products').update({ stock_quantity: newStock }).eq('id', product.id);
-        if (update.error) throw update.error;
-        if (difference !== 0) {
-          var movement = await supabaseClient.from('inventory_movements').insert({
-            product_id: product.id,
-            movement_type: 'adjustment',
-            quantity: Math.abs(difference),
-            previous_stock: product.stock,
-            resulting_stock: newStock,
-            note: data.get('note') || 'Manual stock adjustment',
-            created_by: currentUser.id
-          });
-          if (movement.error) throw movement.error;
-        }
-        await refreshCataloguePage('Stock updated to ' + newStock + '.');
-      } catch (error) { toast(error.message || 'Stock could not be updated.'); }
     });
   }
 
@@ -1507,18 +1708,11 @@
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order || (currentUser.role !== 'owner' && currentUser.id !== order.customerId)) return;
     var voucher = state.settings.voucher;
-    var isCustomer = currentUser.role === 'customer';
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
-      return product ? '<tr><td>' + esc(product.name) + '</td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td></tr>' : '';
+      return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>#YT-' + order.id + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>#YT-' + order.id + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
-    if (isCustomer) {
-      var headers = document.querySelectorAll('.voucher table thead th');
-      if (headers[2]) headers[2].textContent = 'Price';
-      var voucherTotal = document.querySelector('.voucher .cart-total');
-      if (voucherTotal) voucherTotal.remove();
-    }
+    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || 'Order') + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>Order date: ' + order.date + '</small>' + (order.deliveryDate ? '<small>Delivery date: ' + esc(order.deliveryDate) + '</small>' : '') + '</div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
     var savedPaper = localStorage.getItem('yadanar-voucher-paper-size') || 'a4';
     var printButton = document.getElementById('print-voucher');
     printButton.insertAdjacentHTML('beforebegin', '<label class="voucher-print-size">Print size<select id="voucher-paper-size"><option value="a4" ' + (savedPaper === 'a4' ? 'selected' : '') + '>A4</option><option value="a5" ' + (savedPaper === 'a5' ? 'selected' : '') + '>A5</option></select></label>');
@@ -1546,12 +1740,15 @@
       currentUser = await loadAuthenticatedUser(session.user);
       if (currentUser.role === 'owner' || currentUser.role === 'staff') {
         await loadCatalogueData();
+        await loadRemoteOrders();
         if (currentUser.role === 'owner') await loadManagedAccounts();
         return renderAdmin();
       }
       if (currentUser.role === 'customer') {
         if (state.settings.maintenanceMode) throw new Error('Customer ordering is temporarily under maintenance.');
         await loadCatalogueData();
+        await loadRemoteOrders();
+        await migrateLegacyCartOnce();
         return renderCustomer();
       }
       throw new Error('This account does not have access to the application.');

@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-08-05
+Last updated: 2026-08-07
 
 ## 1. Project goal
 
@@ -58,8 +58,8 @@ Database တွင် `profiles`, `categories`, `products`, `orders`, `order_ite
 | Categories/products | Supabase PostgreSQL | Live |
 | Product images | Supabase Storage | Live |
 | Inventory movements | Supabase PostgreSQL | Live |
-| Cart | Browser Local Storage | Migration required |
-| Orders/order items | Mainly browser state | Migration required before real customers |
+| Cart | Supabase `cart_items` through validated RPCs | PR #10 implementation; preview validation required |
+| Orders/order items | Supabase transactional checkout RPC | PR #10 implementation; preview validation required |
 | Customer/staff accounts | Legacy/browser UI is incomplete | Secure server-side flow required |
 | Voucher/settings/maintenance | Browser Local Storage | Migration required |
 | Delivery proofs | Bucket exists | Private upload/access flow required |
@@ -88,8 +88,16 @@ First-version decision:
 
 - Never trust role, price, stock, order total or account ID sent by the frontend.
 - Enforce authorization with RLS plus server-side checks.
-- Product stock update and inventory movement insert must become one database transaction/RPC. They are currently separate client requests and can become inconsistent.
-- Order creation, items, totals and stock reduction must be one server/database transaction.
+- Product stock updates and matching inventory movements remain transaction-safe inventory operations, independent from ordering.
+- Order creation, items, totals and cart clearing are one server/database transaction. Checkout does not reduce or allocate stock.
+- Public order references use database-generated `YT-YYMMDD-NNNN` numbers based on the Asia/Yangon calendar date. Internal UUIDs remain database identifiers and are not shown to customers or owners.
+- Owner order lists are database-filtered and paginated in stable `created_at, id` order. Status groups and debounced search never fetch the complete order table into the browser.
+- Order status transitions are server-enforced and forward-only: Pending → Approved → Processing → Ready to Ship → Delivered. Customers cannot change status.
+- PR #10 database contract treats `order_items.quantity` as the immutable requested quantity. The legacy `allocated_quantity` column is retained only for migration compatibility and historical audit; new rows remain `0`, and application logic does not read or write it.
+- Requested audit snapshots remain in `quantity`, `unit_price`, `line_total` and `orders.total`; owner-managed final values are stored separately in `confirmed_quantity`, `confirmed_unit_price`, `confirmed_line_total` and `orders.confirmed_total`.
+- Customers see original requested values before `Ready to Ship`. At `Ready to Ship` and `Delivered`, Order Details and Voucher show final confirmed unit prices, line totals and grand total. Only a confirmed-quantity difference creates an adjustment notice; price changes never create a comparison/notification.
+- Stock-independent ordering accepts shortages. Checkout and owner confirmation never validate against, reduce or allocate product stock and never create inventory movements, so an order cannot make stock negative. Owner inventory tools remain the source of stock changes.
+- Cart writes and checkout use authenticated, active-customer RPCs. The browser-supplied customer ID, price, unit, minimum, product status and total are never accepted.
 - Delivery proofs stay private; only the related customer and authorized owner/staff may access them.
 - Do not restore authentication, roles or passwords from browser backup JSON.
 - Publishable key is public only with correct RLS/Storage policies; secret/service-role keys are never public.
@@ -98,9 +106,9 @@ First-version decision:
 
 - Supabase built-in email may return `EMAIL RATE LIMIT EXCEEDED`; production recovery needs custom SMTP.
 - Managed-account migration `202608050001` and Edge Functions `username-login` / `account-admin` were deployed to the linked Supabase project on 2026-08-05. Owner username login, customer creation/login, owner-managed password reset, old-password denial, disable denial and re-enable login were manually validated against the deploy preview.
-- Orders, customers, cart, voucher settings and backup flows are not fully migrated from Local Storage.
-- Cart and transactional order migration was moved to PR #9, after the PR #8 catalogue performance work.
-- Inventory writes are not yet transactional.
+- Voucher settings and browser backup flows remain Local Storage features; cart and orders are retired as Local Storage sources of truth by PR #10.
+- Legacy `yt-cart-v3` data is imported once after login only when product IDs are valid, products are active and quantities satisfy current database minimums; the key is then removed.
+- Owner order confirmation changes only confirmed quantity and confirmed unit price; confirmed quantity is not constrained by available stock.
 - README and UI must remain free of usable demo passwords.
 - Browser JSON export is not a production database backup.
 - A purchased custom domain is normally not free; use the Netlify free subdomain until purchasing one.
@@ -120,9 +128,9 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Complete PR #9 deploy-preview manual validation and merge the documented pre-production reset.
-2. Move cart and order submission to Supabase database transactions/RPC in a separately approved follow-up PR.
-3. Complete owner order management and private delivery-proof flow.
+1. Validate and merge PR #10 Supabase cart, transactional ordering and stock-independent confirmation.
+2. Complete private delivery-proof Storage flow.
+3. Move remaining voucher/settings and backup behavior away from browser-only state where appropriate.
 4. Add browser/mobile regression checks and a production-grade database plus Storage backup procedure.
 
 ## 10. Validation checklist
@@ -131,7 +139,7 @@ First-version decision:
 - Accounts: create, disable, owner reset and unauthorized access denial
 - Products: list, add, edit, deactivate, image validation and upload failure
 - Inventory: stock in/out, insufficient stock and movement consistency
-- Orders: create, totals, stock reduction, status permissions and duplicate submission
+- Orders: create, totals, stock-independent confirmation, status permissions and duplicate submission
 - Storage: public product images; private delivery proofs and access denial
 - UI: mobile layout, Myanmar text, keyboard navigation, loading/error/success states
 - Deployment: Netlify live URL, Supabase allowed redirects and no repository secrets
@@ -151,3 +159,10 @@ First-version decision:
 - 2026-08-05: PR #7 was merged. Started PR #8 catalogue performance: 20-row database pagination, database category/search filters, stable ordering, lazy images, complete loading/error/empty/count states, catalogue indexes and protected category-wide price adjustment. Cart/orders remains scheduled for PR #9 after PR #8 approval.
 - 2026-08-05: PR #8 merged. PR #9 Phase 1 completed a read-only pre-production audit and local safety snapshot: 22 products, eight categories, one test customer and six product-image objects are proposed for cleanup; owner Auth/profile, schema, policies, functions, settings and project configuration remain protected. No live cleanup has run.
 - 2026-08-05: After explicit confirmation, PR #9 Phase 2 removed the exact audited demo records and Storage objects. Post-cleanup counts are zero for products, categories, inventory, orders, order items, carts and both Storage buckets; only the active primary owner remains, and voucher/app settings remain unchanged. Browser-local demo seed data and legacy commerce keys were retired.
+- 2026-08-07: PR #9 merged as `0bb2752`. PR #10 started on `codex/supabase-cart-transactional-orders`: account-scoped Supabase cart RPCs, idempotent transactional checkout, requested-versus-allocated quantities, shortage-safe stock updates, transactional owner allocation, stricter active-account RLS, one-time stale cart normalization, and accessible photo preview updates were implemented. Local and deploy-preview validation remain before merge.
+- 2026-08-07: PR #10 order confirmation was corrected to preserve separate requested and confirmed quantity/price audit fields. Customer quantity notices compare only requested versus confirmed quantity; final payable prices and totals appear from Ready to Ship onward without price-change notifications.
+- 2026-08-07: PR #10 retired the stock-allocation concept. Owner confirmation now edits only confirmed quantity and unit price without stock limits; checkout/confirmation do not mutate stock or inventory movements. The legacy allocation column remains unused for compatibility.
+- 2026-08-07: Fixed Ready-to-Ship status normalization so customer Order Details and Voucher use persisted confirmed quantities, unit prices, line totals and grand total. Numeric mapping uses explicit null handling so a confirmed price of `0` remains valid.
+- 2026-08-07: Product Edit now sends all product fields and the desired absolute stock to an active-owner-only atomic RPC. The database locks the row, rejects stale edits, calculates the stock difference from its current value and writes a matching IN/OUT movement only when stock changed. The separate Products-page Adjust Stock action was retired.
+- 2026-08-07: Order list counts and totals now use the same status-aware confirmed-value helpers as details and vouchers. Ready-to-Ship/Delivered list, screen voucher and print output use confirmed quantities, prices, line totals and total; pending states and confirmed-null legacy rows safely use requested values.
+- 2026-08-07: PR #10 added short public order numbers with deterministic legacy backfill, atomic Yangon-date daily sequencing, server-enforced forward status transitions, and database-side Owner Orders status/search filtering with 20-row stable pagination and supporting indexes. Production deployment remains blocked pending approval.

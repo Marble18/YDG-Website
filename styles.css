@@ -89,7 +89,9 @@ body.dark-mode {
 .product-card { background: white; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; transition: .22s ease; }
 .product-card:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
 .product-photo { height: 150px; display: grid; place-items: center; overflow: hidden; background: var(--product-bg, #fbecdf); }
-.product-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.product-photo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.product-card > .product-photo { width: 100%; height: auto; min-width: 0; min-height: 0; aspect-ratio: 4 / 3; }
+.product-card > .product-photo img { width: 100%; height: 100%; min-width: 0; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; object-position: center; }
 .photo-preview-button { width: 100%; padding: 0; border: 0; position: relative; }
 .photo-preview-button::after { content: "Click to enlarge"; position: absolute; inset: auto 10px 10px auto; padding: 5px 7px; border-radius: 7px; background: rgba(37,24,32,.7); color: white; font-size: 10px; opacity: 0; transition: opacity .2s ease; }
 .photo-preview-button:hover::after { opacity: 1; }
@@ -194,6 +196,9 @@ td { padding: 12px 10px; border-top: 1px solid #f2ebed; vertical-align: middle; 
 .cart-empty { color: var(--muted); text-align: center; padding: 25px 0; }
 .photo-lightbox { display: grid; place-items: center; margin-top: 18px; border-radius: 12px; overflow: hidden; background: var(--cream); }
 .photo-lightbox img { max-width: 100%; max-height: 70vh; display: block; object-fit: contain; }
+.photo-lightbox.loading img { opacity: 0; max-height: 1px; }
+.photo-lightbox.loading, .photo-lightbox.error { min-height: 220px; color: var(--muted); }
+.photo-lightbox > span { padding: 24px; text-align: center; }
 .customer-menu-backdrop { position: fixed; inset: 0; z-index: 19; background: rgba(26, 14, 20, .36); }
 .customer-menu-panel { position: fixed; z-index: 21; top: 0; right: 0; width: min(360px, 90vw); height: 100vh; padding: 28px; background: white; box-shadow: -18px 0 50px rgba(40, 16, 29, .18); animation: slide-in .2s ease-out; }
 .customer-menu-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding-bottom: 21px; border-bottom: 1px solid var(--line); }
@@ -254,6 +259,12 @@ td { padding: 12px 10px; border-top: 1px solid #f2ebed; vertical-align: middle; 
 .voucher-proof img { max-width: 100%; max-height: 250px; border-radius: 8px; object-fit: cover; border: 1px solid var(--line); }
 .voucher-print-size { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 700; }
 .voucher-print-size select { min-width: 76px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--cream); color: var(--ink); font: inherit; }
+.order-filter-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 10px; scrollbar-width: thin; }
+.order-filter-tab { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; background: var(--cream); color: var(--muted); padding: 10px 14px; font: inherit; font-weight: 700; cursor: pointer; }
+.order-filter-tab span { display: inline-grid; min-width: 22px; height: 22px; margin-left: 5px; place-items: center; border-radius: 999px; background: #eadde1; color: var(--wine); font-size: 12px; }
+.order-filter-tab.active { border-color: var(--wine); background: var(--wine); color: white; }
+.order-filter-tab.active span { background: white; color: var(--wine); }
+.order-filter-tab:focus-visible { outline: 3px solid rgba(140, 23, 64, .25); outline-offset: 2px; }
 .voucher.print-a5 { max-width: 520px; margin-left: auto; margin-right: auto; padding: 17px; }
 .voucher.print-a5 .voucher-brand { font-size: 21px; }
 .voucher.print-a5 .voucher-top { padding-bottom: 12px; }
@@ -295,6 +306,11 @@ body.dark-mode .inline-error { background: #3d242c; color: #f2b5c4; }
   .modal-backdrop { position: static; display: block; padding: 0; background: white; }
   .modal { width: 100%; max-height: none; overflow: visible; padding: 0; box-shadow: none; border-radius: 0; }
   .voucher { width: 100%; box-sizing: border-box; margin: 0; border-radius: 0; box-shadow: none; }
+  .voucher .table-wrap { overflow: visible; }
+  .voucher table { table-layout: fixed; }
+  .voucher thead { display: table-header-group; }
+  .voucher tr, .voucher-address, .voucher-details, .cart-total { break-inside: avoid; page-break-inside: avoid; }
+  .voucher th:first-child, .voucher td:first-child { width: 42%; overflow-wrap: anywhere; }
   .voucher.print-a5 { max-width: none; padding: 4mm; font-size: 10px; }
   .voucher.print-a5 .voucher-brand { font-size: 18px; }
   .voucher.print-a5 .voucher-top { padding-bottom: 9px; }
