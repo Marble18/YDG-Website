@@ -300,6 +300,11 @@ body.dark-mode .inline-error { background: #3d242c; color: #f2b5c4; }
   .modal-backdrop { position: static; display: block; padding: 0; background: white; }
   .modal { width: 100%; max-height: none; overflow: visible; padding: 0; box-shadow: none; border-radius: 0; }
   .voucher { width: 100%; box-sizing: border-box; margin: 0; border-radius: 0; box-shadow: none; }
+  .voucher .table-wrap { overflow: visible; }
+  .voucher table { table-layout: fixed; }
+  .voucher thead { display: table-header-group; }
+  .voucher tr, .voucher-address, .voucher-details, .cart-total { break-inside: avoid; page-break-inside: avoid; }
+  .voucher th:first-child, .voucher td:first-child { width: 42%; overflow-wrap: anywhere; }
   .voucher.print-a5 { max-width: none; padding: 4mm; font-size: 10px; }
   .voucher.print-a5 .voucher-brand { font-size: 18px; }
   .voucher.print-a5 .voucher-top { padding-bottom: 9px; }
