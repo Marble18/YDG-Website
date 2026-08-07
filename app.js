@@ -248,13 +248,16 @@
       customer: row.profiles ? (row.profiles.full_name || row.profiles.username) : 'Customer',
       items: (row.order_items || []).map(function (item) { return {
         id: item.id, productId: item.product_id, productName: item.product_name, unit: item.unit,
-        unitPrice: Number(item.unit_price), quantity: Number(item.quantity), allocatedQuantity: Number(item.allocated_quantity),
-        confirmedPrice: Number(item.line_total), picked: Boolean(item.picked)
+        unitPrice: Number(item.unit_price), quantity: Number(item.quantity), lineTotal: Number(item.line_total),
+        confirmedQuantity: Number(item.confirmed_quantity), confirmedUnitPrice: Number(item.confirmed_unit_price),
+        confirmedLineTotal: Number(item.confirmed_line_total), allocatedQuantity: Number(item.allocated_quantity),
+        confirmedPrice: Number(item.confirmed_line_total), picked: Boolean(item.picked)
       }; }),
-      total: Number(row.total), status: String(row.status || 'pending').replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }),
+      total: Number(row.total), confirmedTotal: Number(row.confirmed_total), status: String(row.status || 'pending').replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }),
       date: new Date(row.created_at).toLocaleDateString('en-GB'), phone: row.contact_phone || '', address: row.delivery_address || '',
       busStation: row.bus_station || '', deliveryDate: row.preferred_delivery_date || '', note: row.customer_note || '',
-      proofOfDelivery: row.delivery_proof_url || '', adjusted: false
+      proofOfDelivery: row.delivery_proof_url || '',
+      adjusted: (row.order_items || []).some(function (item) { return Number(item.confirmed_quantity) !== Number(item.quantity); })
     };
   }
 
@@ -719,11 +722,14 @@
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order || (currentUser.role !== 'owner' && order.customerId !== currentUser.id)) return;
     var isCustomer = currentUser.role === 'customer';
+    var quantityNotices = order.items.filter(function (item) { return item.confirmedQuantity !== item.quantity; }).map(function (item) {
+      return '<div>Shop adjusted quantity from ' + item.quantity + ' to ' + item.confirmedQuantity + ' for ' + esc(item.productName) + '.</div>';
+    }).join('');
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
-      return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td></tr>';
+      return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (order.adjusted ? '<div class="order-alert">The shop updated the available quantity. ' + (isCustomer ? 'Your confirmed quantities are shown below.' : 'The total below reflects the confirmed quantities.') + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested qty</th><th>' + (isCustomer ? 'Price' : 'Total') + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + (isCustomer ? '' : '<div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>') + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
+    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Final payable total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
     var viewVoucher = document.getElementById('view-voucher');
     if (viewVoucher) viewVoucher.addEventListener('click', function () { renderVoucher(order.id); });
   }
@@ -998,22 +1004,47 @@
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order) return;
     var rows = order.items.map(function (item) {
-      return '<tr><td><b>' + esc(item.productName) + '</b><br><small>' + money(item.unitPrice) + ' / ' + esc(item.unit) + '</small></td><td>' + item.quantity + '</td><td><input class="qty-input" type="number" min="0" max="' + item.quantity + '" value="' + item.allocatedQuantity + '" data-allocation="' + item.id + '"></td><td>' + money(item.confirmedPrice) + '</td></tr>';
+      return '<tr><td><b>' + esc(item.productName) + '</b><br><small>Requested at ' + money(item.unitPrice) + ' / ' + esc(item.unit) + '</small></td><td>' + item.quantity + '</td><td><input class="qty-input" type="number" min="1" step="1" value="' + item.confirmedQuantity + '" data-confirmed-quantity="' + item.id + '"></td><td><input class="checklist-price-input" type="number" min="0" step="1" value="' + item.confirmedUnitPrice + '" data-confirmed-unit-price="' + item.id + '"></td><td><input class="qty-input" type="number" min="0" max="' + item.confirmedQuantity + '" value="' + item.allocatedQuantity + '" data-allocation="' + item.id + '"></td></tr>';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">' + esc(order.orderNumber || order.id) + '</p><h2>Order details</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address) + '</b></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><p class="subtext">Requested quantity is preserved. Allocation may be increased only when current stock is available; reducing it returns stock transactionally.</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested</th><th>Allocated</th><th>Requested total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div><button class="primary full" id="save-allocations">Save allocations</button>');
+    modal('<div class="modal-head"><div><p class="eyebrow">' + esc(order.orderNumber || order.id) + '</p><h2>Order confirmation</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address) + '</b></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><p class="subtext">Requested quantity and price remain unchanged for audit. Confirmed values become payable when status reaches Ready to Ship. Only quantity differences create a customer adjustment notice.</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested qty</th><th>Confirmed qty</th><th>Confirmed unit price</th><th>Stock allocated</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Original total</span><b>' + money(order.total) + '</b></div><div class="cart-total"><span>Confirmed total</span><b>' + money(order.confirmedTotal) + '</b></div><button class="primary full" id="save-allocations">Save confirmation</button>');
     document.getElementById('save-allocations').addEventListener('click', async function (event) {
       var button = event.currentTarget; button.disabled = true; button.textContent = 'Saving…';
       try {
-        var inputs = Array.from(document.querySelectorAll('[data-allocation]'));
+        var inputs = Array.from(document.querySelectorAll('[data-confirmed-quantity]'));
         for (var index = 0; index < inputs.length; index += 1) {
+          var itemId = inputs[index].dataset.confirmedQuantity;
           var quantity = Number(inputs[index].value);
-          if (!Number.isInteger(quantity)) throw new Error('Allocated quantities must be whole numbers.');
-          var original = order.items.find(function (item) { return item.id === inputs[index].dataset.allocation; });
-          if (quantity !== original.allocatedQuantity) await orderService.setAllocation(original.id, quantity);
+          var unitPrice = Number(document.querySelector('[data-confirmed-unit-price="' + itemId + '"]').value);
+          var allocation = Number(document.querySelector('[data-allocation="' + itemId + '"]').value);
+          if (!Number.isInteger(quantity) || quantity < 1) throw new Error('Confirmed quantities must be positive whole numbers.');
+          if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new Error('Confirmed unit prices cannot be negative.');
+          if (!Number.isInteger(allocation) || allocation < 0 || allocation > quantity) throw new Error('Allocated quantity must be between 0 and confirmed quantity.');
+          var original = order.items.find(function (item) { return item.id === itemId; });
+          if (quantity !== original.confirmedQuantity || unitPrice !== original.confirmedUnitPrice || allocation !== original.allocatedQuantity) await orderService.confirmItem(original.id, quantity, unitPrice, allocation);
         }
-        await loadRemoteOrders(); await loadCatalogueData(); renderAdminPage(); closeModal(); toast('Stock allocations updated.');
-      } catch (error) { button.disabled = false; button.textContent = 'Save allocations'; toast(error.message || 'Allocations could not be saved.'); }
+        await loadRemoteOrders(); await loadCatalogueData(); renderAdminPage(); closeModal(); toast('Order confirmation updated.');
+      } catch (error) { button.disabled = false; button.textContent = 'Save confirmation'; toast(error.message || 'Order confirmation could not be saved.'); }
     });
+  }
+
+  function usesConfirmedValues(order) {
+    return order.status === 'Ready to Ship' || order.status === 'Delivered';
+  }
+
+  function visibleQuantity(order, item) {
+    return usesConfirmedValues(order) ? item.confirmedQuantity : item.quantity;
+  }
+
+  function visibleUnitPrice(order, item) {
+    return usesConfirmedValues(order) ? item.confirmedUnitPrice : item.unitPrice;
+  }
+
+  function visibleLineTotal(order, item) {
+    return visibleQuantity(order, item) * visibleUnitPrice(order, item);
+  }
+
+  function visibleOrderTotal(order) {
+    return usesConfirmedValues(order) ? order.confirmedTotal : order.total;
   }
 
   async function updateStatus(orderId, status) {
@@ -1607,18 +1638,12 @@
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order || (currentUser.role !== 'owner' && currentUser.id !== order.customerId)) return;
     var voucher = state.settings.voucher;
-    var isCustomer = currentUser.role === 'customer';
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
-      return product ? '<tr><td>' + esc(product.name) + '</td><td>' + item.quantity + '</td><td>' + money(lineTotal(item)) + '</td></tr>' : '';
+      var quantityIndicator = currentUser.role === 'customer' && item.confirmedQuantity !== item.quantity ? '<br><small>Shop adjusted quantity from ' + item.quantity + ' to ' + item.confirmedQuantity + '</small>' : '';
+      return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + quantityIndicator + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>#YT-' + order.id + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>#YT-' + order.id + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Order total</span><b>' + money(order.total) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
-    if (isCustomer) {
-      var headers = document.querySelectorAll('.voucher table thead th');
-      if (headers[2]) headers[2].textContent = 'Price';
-      var voucherTotal = document.querySelector('.voucher .cart-total');
-      if (voucherTotal) voucherTotal.remove();
-    }
+    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || order.id) + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Final payable total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
     var savedPaper = localStorage.getItem('yadanar-voucher-paper-size') || 'a4';
     var printButton = document.getElementById('print-voucher');
     printButton.insertAdjacentHTML('beforebegin', '<label class="voucher-print-size">Print size<select id="voucher-paper-size"><option value="a4" ' + (savedPaper === 'a4' ? 'selected' : '') + '>A4</option><option value="a5" ' + (savedPaper === 'a5' ? 'selected' : '') + '>A5</option></select></label>');

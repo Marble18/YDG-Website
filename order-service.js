@@ -34,7 +34,7 @@
       },
       listOrders: async function () {
         var result = await client.from('orders')
-          .select('id,order_number,customer_id,status,delivery_address,bus_station,contact_phone,preferred_delivery_date,subtotal,total,delivery_proof_url,customer_note,staff_note,created_at,updated_at,profiles!orders_customer_id_fkey(full_name,username),order_items(id,product_id,product_name,unit,unit_price,quantity,allocated_quantity,line_total,picked)')
+          .select('id,order_number,customer_id,status,delivery_address,bus_station,contact_phone,preferred_delivery_date,subtotal,total,confirmed_subtotal,confirmed_total,delivery_proof_url,customer_note,staff_note,created_at,updated_at,profiles!orders_customer_id_fkey(full_name,username),order_items(id,product_id,product_name,unit,unit_price,quantity,line_total,confirmed_quantity,confirmed_unit_price,confirmed_line_total,allocated_quantity,picked)')
           .order('created_at', { ascending: false });
         if (result.error) throw result.error;
         return result.data || [];
@@ -46,6 +46,14 @@
       },
       setAllocation: function (orderItemId, allocatedQuantity) {
         return rpc('set_order_item_allocation', { p_order_item_id: orderItemId, p_allocated_quantity: allocatedQuantity });
+      },
+      confirmItem: function (orderItemId, confirmedQuantity, confirmedUnitPrice, allocatedQuantity) {
+        return rpc('confirm_order_item', {
+          p_order_item_id: orderItemId,
+          p_confirmed_quantity: confirmedQuantity,
+          p_confirmed_unit_price: confirmedUnitPrice,
+          p_allocated_quantity: allocatedQuantity
+        });
       }
     };
   }
