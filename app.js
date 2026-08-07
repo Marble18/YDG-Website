@@ -242,6 +242,19 @@
     await loadRemoteCart();
   }
 
+  function nullableNumber(value) {
+    return value === null || value === undefined ? null : Number(value);
+  }
+
+  function formatOrderStatus(value) {
+    var status = String(value || 'pending').toLowerCase().replace(/\s+/g, '_');
+    var labels = {
+      pending: 'Pending', approved: 'Approved', review: 'Review', processing: 'Processing',
+      ready_to_ship: 'Ready to Ship', delivered: 'Delivered'
+    };
+    return labels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, function (character) { return character.toUpperCase(); });
+  }
+
   function mapDatabaseOrder(row) {
     return {
       id: row.id, orderNumber: row.order_number, customerId: row.customer_id,
@@ -249,11 +262,11 @@
       items: (row.order_items || []).map(function (item) { return {
         id: item.id, productId: item.product_id, productName: item.product_name, unit: item.unit,
         unitPrice: Number(item.unit_price), quantity: Number(item.quantity), lineTotal: Number(item.line_total),
-        confirmedQuantity: Number(item.confirmed_quantity), confirmedUnitPrice: Number(item.confirmed_unit_price),
-        confirmedLineTotal: Number(item.confirmed_line_total),
-        confirmedPrice: Number(item.confirmed_line_total), picked: Boolean(item.picked)
+        confirmedQuantity: nullableNumber(item.confirmed_quantity), confirmedUnitPrice: nullableNumber(item.confirmed_unit_price),
+        confirmedLineTotal: nullableNumber(item.confirmed_line_total),
+        confirmedPrice: nullableNumber(item.confirmed_line_total), picked: Boolean(item.picked)
       }; }),
-      total: Number(row.total), confirmedTotal: Number(row.confirmed_total), status: String(row.status || 'pending').replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }),
+      total: Number(row.total), confirmedTotal: nullableNumber(row.confirmed_total), status: formatOrderStatus(row.status),
       date: new Date(row.created_at).toLocaleDateString('en-GB'), phone: row.contact_phone || '', address: row.delivery_address || '',
       busStation: row.bus_station || '', deliveryDate: row.preferred_delivery_date || '', note: row.customer_note || '',
       proofOfDelivery: row.delivery_proof_url || '',
@@ -729,7 +742,7 @@
       var product = getProduct(item.productId);
       return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Final payable total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
+    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
     var viewVoucher = document.getElementById('view-voucher');
     if (viewVoucher) viewVoucher.addEventListener('click', function () { renderVoucher(order.id); });
   }
@@ -1030,19 +1043,23 @@
   }
 
   function visibleQuantity(order, item) {
-    return usesConfirmedValues(order) ? item.confirmedQuantity : item.quantity;
+    return usesConfirmedValues(order) && item.confirmedQuantity !== null && item.confirmedQuantity !== undefined
+      ? item.confirmedQuantity : item.quantity;
   }
 
   function visibleUnitPrice(order, item) {
-    return usesConfirmedValues(order) ? item.confirmedUnitPrice : item.unitPrice;
+    return usesConfirmedValues(order) && item.confirmedUnitPrice !== null && item.confirmedUnitPrice !== undefined
+      ? item.confirmedUnitPrice : item.unitPrice;
   }
 
   function visibleLineTotal(order, item) {
-    return visibleQuantity(order, item) * visibleUnitPrice(order, item);
+    return usesConfirmedValues(order) && item.confirmedLineTotal !== null && item.confirmedLineTotal !== undefined
+      ? item.confirmedLineTotal : item.lineTotal;
   }
 
   function visibleOrderTotal(order) {
-    return usesConfirmedValues(order) ? order.confirmedTotal : order.total;
+    return usesConfirmedValues(order) && order.confirmedTotal !== null && order.confirmedTotal !== undefined
+      ? order.confirmedTotal : order.total;
   }
 
   async function updateStatus(orderId, status) {
@@ -1641,7 +1658,7 @@
       var quantityIndicator = currentUser.role === 'customer' && item.confirmedQuantity !== item.quantity ? '<br><small>Shop adjusted quantity from ' + item.quantity + ' to ' + item.confirmedQuantity + '</small>' : '';
       return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + quantityIndicator + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || order.id) + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Final payable total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
+    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || order.id) + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || order.id) + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
     var savedPaper = localStorage.getItem('yadanar-voucher-paper-size') || 'a4';
     var printButton = document.getElementById('print-voucher');
     printButton.insertAdjacentHTML('beforebegin', '<label class="voucher-print-size">Print size<select id="voucher-paper-size"><option value="a4" ' + (savedPaper === 'a4' ? 'selected' : '') + '>A4</option><option value="a5" ' + (savedPaper === 'a5' ? 'selected' : '') + '>A5</option></select></label>');
