@@ -300,17 +300,22 @@ body.dark-mode .product-skeleton { background: #211a20; }
 body.dark-mode .skeleton-photo, body.dark-mode .skeleton-line, body.dark-mode .skeleton-row span { background: linear-gradient(90deg, #30272e 25%, #3a3037 50%, #30272e 75%); background-size: 200% 100%; }
 body.dark-mode .inline-error { background: #3d242c; color: #f2b5c4; }
 
+#voucher-print-root { display: none; }
+
 @media print {
-  body { background: white; }
-  #app, #toast, .modal-backdrop::before, .no-print { display: none !important; }
-  .modal-backdrop { position: static; display: block; padding: 0; background: white; }
-  .modal { width: 100%; max-height: none; overflow: visible; padding: 0; box-shadow: none; border-radius: 0; }
-  .voucher { width: 100%; box-sizing: border-box; margin: 0; border-radius: 0; box-shadow: none; }
+  html, body { margin: 0; padding: 0; background: white; }
+  body.voucher-printing > *:not(#voucher-print-root) { display: none !important; }
+  body.voucher-printing #voucher-print-root { display: block !important; width: 100%; color: #22171d; font-family: "DM Sans", "Noto Sans Myanmar", sans-serif; }
+  #voucher-print-root .voucher { display: block !important; width: 100%; box-sizing: border-box; margin: 0; border-radius: 0; box-shadow: none; overflow: visible; }
   .voucher .table-wrap { overflow: visible; }
-  .voucher table { table-layout: fixed; }
+  .voucher table { width: 100%; table-layout: fixed; border-collapse: collapse; }
   .voucher thead { display: table-header-group; }
+  .voucher tfoot { display: table-footer-group; }
   .voucher tr, .voucher-address, .voucher-details, .cart-total { break-inside: avoid; page-break-inside: avoid; }
   .voucher th:first-child, .voucher td:first-child { width: 42%; overflow-wrap: anywhere; }
+  .voucher th, .voucher td { overflow-wrap: anywhere; }
+  .voucher .cart-total { break-before: avoid; page-break-before: avoid; }
+  .voucher-footer { break-inside: avoid; page-break-inside: avoid; }
   .voucher.print-a5 { max-width: none; padding: 4mm; font-size: 10px; }
   .voucher.print-a5 .voucher-brand { font-size: 18px; }
   .voucher.print-a5 .voucher-top { padding-bottom: 9px; }

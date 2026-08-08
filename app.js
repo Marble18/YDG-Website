@@ -26,6 +26,7 @@
   var dashboardLowStock = { items: [], total: 0, loading: false, error: '' };
   var remoteCart = [];
   var checkoutKey = null;
+  var activeVoucherPrint = null;
   var THEME_STORAGE = 'yt-theme-v2';
 
   applyTheme(localStorage.getItem(THEME_STORAGE) || 'light');
@@ -313,7 +314,8 @@
   }
 
   function topbar(hasCart) {
-    var customerMenu = currentUser.role === 'customer' ? '<button class="customer-menu-trigger" id="open-customer-menu" aria-label="Open customer menu"><span class="customer-menu-name">' + esc(currentUser.name) + '</span><span class="hamburger"><i></i><i></i><i></i></span></button>' : '<div class="user-label"><b>' + esc(currentUser.name) + '</b><span>Owner account</span></div><button class="logout" id="logout">Log out</button>';
+    var accountLabel = currentUser.role === 'staff' ? 'Staff account' : 'Owner account';
+    var customerMenu = currentUser.role === 'customer' ? '<button class="customer-menu-trigger" id="open-customer-menu" aria-label="Open customer menu"><span class="customer-menu-name">' + esc(currentUser.name) + '</span><span class="hamburger"><i></i><i></i><i></i></span></button>' : '<div class="user-label"><b>' + esc(currentUser.name) + '</b><span>' + accountLabel + '</span></div><button class="logout" id="logout">Log out</button>';
     return '<header class="topbar"><div class="brand-lockup"><div class="monogram">Y</div><span>Yadanar Theingi<br>Stationery & Fancy</span></div><div class="top-actions">' + (hasCart ? '<button class="cart-button" id="open-cart">Cart <span class="cart-count">' + cartCount() + '</span></button>' : '') + customerMenu + '</div></header>';
   }
 
@@ -461,7 +463,7 @@
         await loadCatalogueData();
         await loadRemoteOrders();
         if (currentUser.role === 'owner' || currentUser.role === 'staff') {
-          if (currentUser.role === 'owner') await loadManagedAccounts();
+          await loadManagedAccounts();
           renderAdmin();
         } else {
           await migrateLegacyCartOnce();
@@ -768,7 +770,7 @@
 
   function renderOrderDetails(orderId) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
-    if (!order || (currentUser.role !== 'owner' && order.customerId !== currentUser.id)) return;
+    if (!order || (!['owner', 'staff'].includes(currentUser.role) && order.customerId !== currentUser.id)) return;
     var isCustomer = currentUser.role === 'customer';
     var quantityNotices = order.items.filter(function (item) { return item.confirmedQuantity !== item.quantity; }).map(function (item) {
       return '<div>Shop adjusted quantity from ' + item.quantity + ' to ' + item.confirmedQuantity + ' for ' + esc(item.productName) + '.</div>';
@@ -783,8 +785,10 @@
   }
 
   function renderAdmin() {
-    var accountNavigation = currentUser.role === 'owner' ? '<button class="nav-button" data-page="customers">Customers</button><button class="nav-button" data-page="owners">Owner accounts</button>' : '';
-    document.getElementById('app').innerHTML = topbar(false) + '<div class="admin-layout"><aside class="sidebar"><div class="admin-brand">Yadanar Theingi<span>Owner dashboard</span></div><button class="nav-button" data-page="dashboard">Dashboard</button><button class="nav-button" data-page="orders">Orders</button><button class="nav-button" data-page="products">Products</button><button class="nav-button" data-page="inventory">Inventory</button>' + accountNavigation + '<button class="nav-button" data-page="settings">Settings</button></aside><main class="admin-content" id="admin-content"></main></div><div id="modal-root"></div>';
+    var accountNavigation = '<button class="nav-button" data-page="customers">Customers</button>' + (currentUser.role === 'owner' ? '<button class="nav-button" data-page="owners">Owner accounts</button>' : '');
+    var settingsNavigation = currentUser.role === 'owner' ? '<button class="nav-button" data-page="settings">Settings</button>' : '';
+    var dashboardLabel = currentUser.role === 'staff' ? 'Staff dashboard' : 'Owner dashboard';
+    document.getElementById('app').innerHTML = topbar(false) + '<div class="admin-layout"><aside class="sidebar"><div class="admin-brand">Yadanar Theingi<span>' + dashboardLabel + '</span></div><button class="nav-button" data-page="dashboard">Dashboard</button><button class="nav-button" data-page="orders">Orders</button><button class="nav-button" data-page="products">Products</button><button class="nav-button" data-page="inventory">Inventory</button>' + accountNavigation + settingsNavigation + '</aside><main class="admin-content" id="admin-content"></main></div><div id="modal-root"></div>';
     document.getElementById('logout').addEventListener('click', logout);
     document.querySelectorAll('[data-page]').forEach(function (button) { button.addEventListener('click', function () { adminPage = button.dataset.page; renderAdminPage(); }); });
     renderAdminPage();
@@ -793,7 +797,9 @@
   function renderAdminPage() {
     document.querySelectorAll('[data-page]').forEach(function (button) { button.classList.toggle('active', button.dataset.page === adminPage); });
     var content = document.getElementById('admin-content');
-    var pages = { dashboard: dashboardPage, orders: ordersPage, products: productsPage, inventory: inventoryPage, customers: customersPage, owners: ownersPage, settings: settingsPage };
+    var pages = { dashboard: dashboardPage, orders: ordersPage, products: productsPage, inventory: inventoryPage, customers: customersPage };
+    if (currentUser.role === 'owner') { pages.owners = ownersPage; pages.settings = settingsPage; }
+    if (!pages[adminPage]) adminPage = 'dashboard';
     content.innerHTML = pages[adminPage]();
     bindAdmin();
   }
@@ -802,7 +808,7 @@
     var pending = Number(ownerOrders.counts.pending) || 0;
     var revenue = ownerOrders.deliveredRevenue;
     var customers = state.users.filter(function (user) { return user.role === 'customer' && user.status === 'Active'; }).length;
-    return '<div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Good morning, Owner</h1><p>Review new orders and keep stock ready for shipping.</p></div><button class="primary" data-go="orders">View orders</button></div><section class="dashboard-stats">' + stat('New orders', pending, pending ? 'Needs your review' : 'All caught up') + stat('Delivered revenue', money(revenue), 'Delivered orders') + stat('Active customers', customers, 'Owner-managed accounts') + '<article class="stat-card"><div class="stat-label">Low stock items</div><div class="stat-value" id="low-stock-count">...</div><div class="stat-change" id="low-stock-note">Checking stock levels</div></article></section><section class="admin-grid"><div class="panel"><h2 class="panel-title">Recent orders <button class="text-link" data-go="orders">View all</button></h2>' + adminOrderTable(ownerOrders.recent, false) + '</div><div class="panel"><h2 class="panel-title">Low stock</h2><div id="dashboard-low-stock" aria-busy="true">' + productSkeletons(3) + '</div></div></section>';
+    return '<div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Good morning, ' + (currentUser.role === 'staff' ? 'Staff' : 'Owner') + '</h1><p>Review new orders and keep stock ready for shipping.</p></div><button class="primary" data-go="orders">View orders</button></div><section class="dashboard-stats">' + stat('New orders', pending, pending ? 'Needs your review' : 'All caught up') + stat('Delivered revenue', money(revenue), 'Delivered orders') + stat('Active customers', customers, 'Managed customer accounts') + '<article class="stat-card"><div class="stat-label">Low stock items</div><div class="stat-value" id="low-stock-count">...</div><div class="stat-change" id="low-stock-note">Checking stock levels</div></article></section><section class="admin-grid"><div class="panel"><h2 class="panel-title">Recent orders <button class="text-link" data-go="orders">View all</button></h2>' + adminOrderTable(ownerOrders.recent, false) + '</div><div class="panel"><h2 class="panel-title">Low stock</h2><div id="dashboard-low-stock" aria-busy="true">' + productSkeletons(3) + '</div></div></section>';
   }
 
   async function loadDashboardLowStock() {
@@ -877,7 +883,7 @@
       more.innerHTML = '';
       document.getElementById('retry-owner-orders').addEventListener('click', function () { loadOwnerOrders(true); }); return;
     }
-    results.innerHTML = ownerOrders.items.length ? adminOrderTable(ownerOrders.items, currentUser.role === 'owner') : '<div class="empty">No matching orders found in this group.</div>';
+    results.innerHTML = ownerOrders.items.length ? adminOrderTable(ownerOrders.items, ['owner', 'staff'].includes(currentUser.role)) : '<div class="empty">No matching orders found in this group.</div>';
     bindOrderTableActions(results);
     if (ownerOrders.error) more.innerHTML = '<div class="inline-error">' + esc(ownerOrders.error) + ' <button class="text-link" id="retry-owner-orders-more">Retry</button></div>';
     else if (ownerOrders.items.length < ownerOrders.total) more.innerHTML = '<button class="secondary" id="load-more-owner-orders" ' + (ownerOrders.loading ? 'disabled' : '') + '>' + (ownerOrders.loading ? 'Loading…' : 'Load more orders') + '</button>';
@@ -1554,22 +1560,23 @@
       var quantity = Number(data.get('quantity'));
       if (!Number.isInteger(quantity) || quantity < 1) return toast('Enter a whole quantity of 1 or more.');
       if (data.get('type') === 'OUT' && quantity > product.stock) return toast('Stock out quantity exceeds current stock.');
-      var resultingStock = product.stock + (data.get('type') === 'IN' ? quantity : -quantity);
+      var submitButton = event.target.querySelector('button[type="submit"]');
+      submitButton.disabled = true;
+      submitButton.textContent = 'Recording...';
       try {
-        var update = await supabaseClient.from('products').update({ stock_quantity: resultingStock }).eq('id', product.id);
-        if (update.error) throw update.error;
-        var movement = await supabaseClient.from('inventory_movements').insert({
-          product_id: product.id,
-          movement_type: data.get('type') === 'IN' ? 'stock_in' : 'stock_out',
-          quantity: quantity,
-          previous_stock: product.stock,
-          resulting_stock: resultingStock,
-          note: data.get('note') || 'Manual adjustment',
-          created_by: currentUser.id
+        var result = await supabaseClient.rpc('record_stock_movement', {
+          p_product_id: product.id,
+          p_direction: data.get('type').toLowerCase(),
+          p_quantity: quantity,
+          p_note: data.get('note') || 'Manual adjustment'
         });
-        if (movement.error) throw movement.error;
+        if (result.error) throw result.error;
         await refreshCataloguePage('Inventory movement recorded.');
-      } catch (error) { toast(error.message || 'Inventory movement could not be saved.'); }
+      } catch (error) {
+        submitButton.disabled = false;
+        submitButton.textContent = 'Record movement';
+        toast(error.message || 'Inventory movement could not be saved.');
+      }
     });
   }
 
@@ -1687,9 +1694,9 @@
     reader.readAsText(file);
   }
 
-  function applyVoucherPrintSize(size) {
+  function applyVoucherPrintSize(size, target) {
     var paper = size === 'a5' ? 'a5' : 'a4';
-    var voucher = document.querySelector('.voucher');
+    var voucher = target || document.querySelector('#modal-root .voucher');
     if (voucher) {
       voucher.classList.toggle('print-a5', paper === 'a5');
       voucher.classList.toggle('print-a4', paper === 'a4');
@@ -1704,9 +1711,49 @@
     localStorage.setItem('yadanar-voucher-paper-size', paper);
   }
 
+  function clearVoucherPrint() {
+    var root = document.getElementById('voucher-print-root');
+    document.body.classList.remove('voucher-printing');
+    if (root) root.innerHTML = '';
+    activeVoucherPrint = null;
+  }
+
+  function prepareVoucherPrint(source, paper) {
+    var root = document.getElementById('voucher-print-root');
+    if (!root || !source) throw new Error('Voucher print content is not ready.');
+    root.innerHTML = '';
+    var printedVoucher = source.cloneNode(true);
+    printedVoucher.classList.add('voucher-print-document');
+    applyVoucherPrintSize(paper, printedVoucher);
+    root.appendChild(printedVoucher);
+    document.body.classList.add('voucher-printing');
+    activeVoucherPrint = { source: source, paper: paper };
+    return printedVoucher;
+  }
+
+  async function waitForVoucherAssets(voucher) {
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    var images = Array.from(voucher.querySelectorAll('img'));
+    await Promise.all(images.map(function (image) {
+      if (image.complete) return image.decode ? image.decode().catch(function () {}) : Promise.resolve();
+      return new Promise(function (resolve) {
+        image.addEventListener('load', resolve, { once: true });
+        image.addEventListener('error', resolve, { once: true });
+      });
+    }));
+    await new Promise(function (resolve) { requestAnimationFrame(function () { requestAnimationFrame(resolve); }); });
+  }
+
+  window.addEventListener('beforeprint', function () {
+    if (activeVoucherPrint && !document.querySelector('#voucher-print-root .voucher')) {
+      prepareVoucherPrint(activeVoucherPrint.source, activeVoucherPrint.paper);
+    }
+  });
+  window.addEventListener('afterprint', clearVoucherPrint);
+
   function renderVoucher(orderId) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
-    if (!order || (currentUser.role !== 'owner' && currentUser.id !== order.customerId)) return;
+    if (!order || (!['owner', 'staff'].includes(currentUser.role) && currentUser.id !== order.customerId)) return;
     var voucher = state.settings.voucher;
     var rows = order.items.map(function (item) {
       var product = getProduct(item.productId);
@@ -1717,9 +1764,24 @@
     var printButton = document.getElementById('print-voucher');
     printButton.insertAdjacentHTML('beforebegin', '<label class="voucher-print-size">Print size<select id="voucher-paper-size"><option value="a4" ' + (savedPaper === 'a4' ? 'selected' : '') + '>A4</option><option value="a5" ' + (savedPaper === 'a5' ? 'selected' : '') + '>A5</option></select></label>');
     var paperSize = document.getElementById('voucher-paper-size');
-    applyVoucherPrintSize(savedPaper);
-    paperSize.addEventListener('change', function () { applyVoucherPrintSize(paperSize.value); });
-    printButton.addEventListener('click', function () { applyVoucherPrintSize(paperSize.value); window.print(); });
+    var screenVoucher = document.querySelector('#modal-root .voucher');
+    applyVoucherPrintSize(savedPaper, screenVoucher);
+    paperSize.addEventListener('change', function () { applyVoucherPrintSize(paperSize.value, screenVoucher); });
+    printButton.addEventListener('click', async function () {
+      printButton.disabled = true;
+      printButton.textContent = 'Preparing print...';
+      try {
+        var printedVoucher = prepareVoucherPrint(screenVoucher, paperSize.value);
+        await waitForVoucherAssets(printedVoucher);
+        window.print();
+      } catch (error) {
+        clearVoucherPrint();
+        toast(error.message || 'Voucher print could not be prepared.');
+      } finally {
+        printButton.disabled = false;
+        printButton.textContent = 'Print voucher';
+      }
+    });
   }
 
   async function logout() {
@@ -1741,7 +1803,7 @@
       if (currentUser.role === 'owner' || currentUser.role === 'staff') {
         await loadCatalogueData();
         await loadRemoteOrders();
-        if (currentUser.role === 'owner') await loadManagedAccounts();
+        await loadManagedAccounts();
         return renderAdmin();
       }
       if (currentUser.role === 'customer') {
