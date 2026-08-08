@@ -3,7 +3,7 @@ import { adminClient, publicClient } from '../_shared/supabase.ts'
 
 type Profile = { id: string; username: string; full_name: string | null; role: string; is_active: boolean; created_at: string }
 
-async function requireOwner(request: Request) {
+async function requireOperator(request: Request) {
   const header = request.headers.get('Authorization') ?? ''
   const token = header.replace(/^Bearer\s+/i, '')
   if (!token) return null
@@ -18,7 +18,7 @@ async function requireOwner(request: Request) {
     .eq('id', data.user.id)
     .maybeSingle()
 
-  if (!profile?.is_active || profile.role !== 'owner') return null
+  if (!profile?.is_active || !['owner', 'staff'].includes(profile.role)) return null
   return { admin, caller: profile }
 }
 
@@ -38,16 +38,17 @@ Deno.serve(async (request) => {
   if (request.method !== 'POST') return json({ ok: false, error: 'Method not allowed.' }, 405)
 
   try {
-    const auth = await requireOwner(request)
-    if (!auth) return json({ ok: false, error: 'Owner access is required.' }, 403)
+    const auth = await requireOperator(request)
+    if (!auth) return json({ ok: false, error: 'Active owner or staff access is required.' }, 403)
     const { admin, caller } = auth
     const body = await request.json()
 
     if (body.action === 'list') {
-      const { data, error } = await admin
+      let query = admin
         .from('profiles')
         .select('id, username, full_name, role, is_active, created_at')
-        .in('role', ['owner', 'staff', 'customer'])
+      query = caller.role === 'owner' ? query.in('role', ['owner', 'staff', 'customer']) : query.eq('role', 'customer')
+      const { data, error } = await query
         .order('created_at', { ascending: false })
       if (error) throw error
       return json({ ok: true, accounts: (data as Profile[]).map(accountView) })
@@ -62,6 +63,7 @@ Deno.serve(async (request) => {
       if (!validUsername(username)) return json({ ok: false, error: 'Username must be 3–32 lowercase letters, numbers, dot, dash or underscore.' }, 400)
       if (!fullName || fullName.length > 100) return json({ ok: false, error: 'Full name is required and must be under 100 characters.' }, 400)
       if (!role) return json({ ok: false, error: 'Only customer or staff accounts can be created.' }, 400)
+      if (caller.role === 'staff' && role !== 'customer') return json({ ok: false, error: 'Staff can create customer accounts only.' }, 403)
       if (!validPassword(password)) return json({ ok: false, error: 'Password must be at least 6 characters.' }, 400)
 
       const email = `${username}@accounts.ydg.invalid`
@@ -95,6 +97,7 @@ Deno.serve(async (request) => {
 
     const { data: target } = await admin.from('profiles').select('id, role').eq('id', userId).maybeSingle()
     if (!target || !['customer', 'staff'].includes(target.role)) return json({ ok: false, error: 'Managed account not found.' }, 404)
+    if (caller.role === 'staff' && target.role !== 'customer') return json({ ok: false, error: 'Staff can manage customer accounts only.' }, 403)
 
     if (body.action === 'set-active') {
       const isActive = body.isActive === true

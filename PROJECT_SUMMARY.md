@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-08-07
+Last updated: 2026-08-08
 
 ## 1. Project goal
 
@@ -58,9 +58,9 @@ Database တွင် `profiles`, `categories`, `products`, `orders`, `order_ite
 | Categories/products | Supabase PostgreSQL | Live |
 | Product images | Supabase Storage | Live |
 | Inventory movements | Supabase PostgreSQL | Live |
-| Cart | Supabase `cart_items` through validated RPCs | PR #10 implementation; preview validation required |
-| Orders/order items | Supabase transactional checkout RPC | PR #10 implementation; preview validation required |
-| Customer/staff accounts | Legacy/browser UI is incomplete | Secure server-side flow required |
+| Cart | Supabase `cart_items` through validated RPCs | Live since PR #10 |
+| Orders/order items | Supabase transactional checkout RPC | Live since PR #10 |
+| Customer/staff accounts | Supabase Auth + protected Edge Functions | Live; PR #11 expands active-staff customer operations |
 | Voucher/settings/maintenance | Browser Local Storage | Migration required |
 | Delivery proofs | Bucket exists | Private upload/access flow required |
 | Backup/restore | Browser Local Storage | Not a production database backup |
@@ -93,6 +93,9 @@ First-version decision:
 - Public order references use database-generated `YT-YYMMDD-NNNN` numbers based on the Asia/Yangon calendar date. Internal UUIDs remain database identifiers and are not shown to customers or owners.
 - Owner order lists are database-filtered and paginated in stable `created_at, id` order. Status groups and debounced search never fetch the complete order table into the browser.
 - Order status transitions are server-enforced and forward-only: Pending → Approved → Processing → Ready to Ship → Delivered. Customers cannot change status.
+- Active staff share operational product, inventory, order, voucher and customer-account actions with the owner. Owner identity, owner/staff account management, Settings and project security controls remain owner-only.
+- Staff authorization is enforced from the authenticated profile (`role in ('owner','staff')` and `is_active = true`) inside RLS, RPCs and the account-admin Edge Function; frontend visibility is not an authorization boundary.
+- The primary owner and all owner/staff targets are protected from staff account actions server-side. Staff can list, create, reset and enable/disable customer accounts only and cannot create/promote staff or owner accounts.
 - PR #10 database contract treats `order_items.quantity` as the immutable requested quantity. The legacy `allocated_quantity` column is retained only for migration compatibility and historical audit; new rows remain `0`, and application logic does not read or write it.
 - Requested audit snapshots remain in `quantity`, `unit_price`, `line_total` and `orders.total`; owner-managed final values are stored separately in `confirmed_quantity`, `confirmed_unit_price`, `confirmed_line_total` and `orders.confirmed_total`.
 - Customers see original requested values before `Ready to Ship`. At `Ready to Ship` and `Delivered`, Order Details and Voucher show final confirmed unit prices, line totals and grand total. Only a confirmed-quantity difference creates an adjustment notice; price changes never create a comparison/notification.
@@ -107,6 +110,9 @@ First-version decision:
 - Supabase built-in email may return `EMAIL RATE LIMIT EXCEEDED`; production recovery needs custom SMTP.
 - Managed-account migration `202608050001` and Edge Functions `username-login` / `account-admin` were deployed to the linked Supabase project on 2026-08-05. Owner username login, customer creation/login, owner-managed password reset, old-password denial, disable denial and re-enable login were manually validated against the deploy preview.
 - Voucher settings and browser backup flows remain Local Storage features; cart and orders are retired as Local Storage sources of truth by PR #10.
+- PR #11 fixes blank voucher printing by cloning the persisted-data voucher into a dedicated print root outside `#app`; the previous print stylesheet hid `#app` and therefore hid the voucher modal itself. Font/image readiness and `beforeprint`/`afterprint` cleanup keep print and cancel flows stable.
+- Voucher printing supports explicit A4 (10 mm margins) and A5 (7 mm margins), repeating table headers, non-splitting rows/totals and long-name wrapping. Screen and print use the same requested/confirmed display helpers and public order number.
+- Customer catalogue photos use a card-specific 4:3 responsive wrapper and final `object-fit: contain; object-position: center` without changing owner thumbnails.
 - Legacy `yt-cart-v3` data is imported once after login only when product IDs are valid, products are active and quantities satisfy current database minimums; the key is then removed.
 - Owner order confirmation changes only confirmed quantity and confirmed unit price; confirmed quantity is not constrained by available stock.
 - README and UI must remain free of usable demo passwords.
@@ -128,7 +134,7 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Validate and merge PR #10 Supabase cart, transactional ordering and stock-independent confirmation.
+1. Validate and merge PR #11 production stabilization and staff operational permissions.
 2. Complete private delivery-proof Storage flow.
 3. Move remaining voucher/settings and backup behavior away from browser-only state where appropriate.
 4. Add browser/mobile regression checks and a production-grade database plus Storage backup procedure.
@@ -166,3 +172,5 @@ First-version decision:
 - 2026-08-07: Product Edit now sends all product fields and the desired absolute stock to an active-owner-only atomic RPC. The database locks the row, rejects stale edits, calculates the stock difference from its current value and writes a matching IN/OUT movement only when stock changed. The separate Products-page Adjust Stock action was retired.
 - 2026-08-07: Order list counts and totals now use the same status-aware confirmed-value helpers as details and vouchers. Ready-to-Ship/Delivered list, screen voucher and print output use confirmed quantities, prices, line totals and total; pending states and confirmed-null legacy rows safely use requested values.
 - 2026-08-07: PR #10 added short public order numbers with deterministic legacy backfill, atomic Yangon-date daily sequencing, server-enforced forward status transitions, and database-side Owner Orders status/search filtering with 20-row stable pagination and supporting indexes. Production deployment remains blocked pending approval.
+- 2026-08-08: PR #10 merged as `990c3af`; GitHub deployment and Cloudflare build checks completed successfully.
+- 2026-08-08: PR #11 production stabilization fixed the voucher blank-print root cause with a dedicated print document, added verified A4/A5 multi-page layouts, retained status-aware confirmed totals and image containment, and introduced active-staff operational permissions with server-side primary-owner protection. Migration `202608080001` and the updated account-admin Edge Function were deployed to the linked Supabase project; DB lint and anonymous denial passed. Deploy Preview role/manual tests remain before merge.
