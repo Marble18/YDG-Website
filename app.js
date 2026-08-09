@@ -12,6 +12,7 @@
   var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
   var accountService = window.createAccountService(supabaseClient);
   var productCatalogueService = window.createProductCatalogueService(supabaseClient);
+  var categoryService = window.createCategoryService(supabaseClient);
   var orderService = window.createOrderService(supabaseClient);
   var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
@@ -24,6 +25,7 @@
   var ownerCatalogue = { items: [], total: 0, search: '', categoryId: '', visibility: 'all', loading: false, error: '', requestId: 0 };
   var ownerOrders = { items: [], total: 0, group: 'active', search: '', counts: { all: 0, pending: 0, active: 0, ready: 0, delivered: 0 }, customerCounts: {}, recent: [], deliveredRevenue: 0, loading: false, error: '', requestId: 0 };
   var dashboardLowStock = { items: [], total: 0, loading: false, error: '' };
+  var managedCategories = { items: [], loading: false, error: '' };
   var remoteCart = [];
   var checkoutKey = null;
   var activeVoucherPrint = null;
@@ -788,7 +790,7 @@
     var accountNavigation = '<button class="nav-button" data-page="customers">Customers</button>' + (currentUser.role === 'owner' ? '<button class="nav-button" data-page="owners">Owner accounts</button>' : '');
     var settingsNavigation = currentUser.role === 'owner' ? '<button class="nav-button" data-page="settings">Settings</button>' : '';
     var dashboardLabel = currentUser.role === 'staff' ? 'Staff dashboard' : 'Owner dashboard';
-    document.getElementById('app').innerHTML = topbar(false) + '<div class="admin-layout"><aside class="sidebar"><div class="admin-brand">Yadanar Theingi<span>' + dashboardLabel + '</span></div><button class="nav-button" data-page="dashboard">Dashboard</button><button class="nav-button" data-page="orders">Orders</button><button class="nav-button" data-page="products">Products</button><button class="nav-button" data-page="inventory">Inventory</button>' + accountNavigation + settingsNavigation + '</aside><main class="admin-content" id="admin-content"></main></div><div id="modal-root"></div>';
+    document.getElementById('app').innerHTML = topbar(false) + '<div class="admin-layout"><aside class="sidebar"><div class="admin-brand">Yadanar Theingi<span>' + dashboardLabel + '</span></div><button class="nav-button" data-page="dashboard">Dashboard</button><button class="nav-button" data-page="orders">Orders</button><button class="nav-button" data-page="products">Products</button><button class="nav-button" data-page="categories">Categories</button><button class="nav-button" data-page="inventory">Inventory</button>' + accountNavigation + settingsNavigation + '</aside><main class="admin-content" id="admin-content"></main></div><div id="modal-root"></div>';
     document.getElementById('logout').addEventListener('click', logout);
     document.querySelectorAll('[data-page]').forEach(function (button) { button.addEventListener('click', function () { adminPage = button.dataset.page; renderAdminPage(); }); });
     renderAdminPage();
@@ -797,7 +799,7 @@
   function renderAdminPage() {
     document.querySelectorAll('[data-page]').forEach(function (button) { button.classList.toggle('active', button.dataset.page === adminPage); });
     var content = document.getElementById('admin-content');
-    var pages = { dashboard: dashboardPage, orders: ordersPage, products: productsPage, inventory: inventoryPage, customers: customersPage };
+    var pages = { dashboard: dashboardPage, orders: ordersPage, products: productsPage, categories: categoriesPage, inventory: inventoryPage, customers: customersPage };
     if (currentUser.role === 'owner') { pages.owners = ownersPage; pages.settings = settingsPage; }
     if (!pages[adminPage]) adminPage = 'dashboard';
     content.innerHTML = pages[adminPage]();
@@ -902,6 +904,82 @@
   function productsPage() {
     var categoryOptions = state.categories.map(function (category) { return '<option value="' + category.id + '" ' + (String(ownerCatalogue.categoryId) === String(category.id) ? 'selected' : '') + '>' + esc(category.name) + '</option>'; }).join('');
     return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Search and manage the catalogue without loading every product at once.</p></div><div class="action-row"><button class="secondary" id="export-products">Export products</button><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><section class="panel catalogue-toolbar"><label class="field">Search products<input id="owner-product-search" value="' + esc(ownerCatalogue.search) + '" placeholder="Product name..." autocomplete="off"></label><label class="field">Category<select id="owner-product-category"><option value="">All Categories</option>' + categoryOptions + '</select></label><label class="field">Status<select id="owner-product-status"><option value="all" ' + (ownerCatalogue.visibility === 'all' ? 'selected' : '') + '>Active and inactive</option><option value="active" ' + (ownerCatalogue.visibility === 'active' ? 'selected' : '') + '>Active only</option><option value="inactive" ' + (ownerCatalogue.visibility === 'inactive' ? 'selected' : '') + '>Inactive only</option></select></label></section><div class="catalogue-result-heading"><span id="owner-product-count" aria-live="polite"></span></div><div class="panel table-wrap" id="owner-product-results" aria-busy="true"></div><div class="catalogue-more" id="owner-product-more"></div>';
+  }
+
+  function categoriesPage() {
+    return '<div class="page-heading"><div><p class="eyebrow">Catalogue setup</p><h1>Categories</h1><p>Owner and active staff can remove a category only when it has no active or inactive products.</p></div></div><div class="catalogue-result-heading"><span id="managed-category-count" aria-live="polite"></span></div><div class="panel table-wrap" id="managed-category-results" aria-busy="true"></div>';
+  }
+
+  async function loadManagedCategories() {
+    managedCategories.loading = true;
+    managedCategories.error = '';
+    renderManagedCategories();
+    try {
+      managedCategories.items = await categoryService.listManaged();
+    } catch (error) {
+      managedCategories.error = error.message || 'Categories could not be loaded.';
+    } finally {
+      managedCategories.loading = false;
+      renderManagedCategories();
+    }
+  }
+
+  function renderManagedCategories() {
+    var results = document.getElementById('managed-category-results');
+    var count = document.getElementById('managed-category-count');
+    if (!results || !count) return;
+    results.setAttribute('aria-busy', managedCategories.loading ? 'true' : 'false');
+    count.textContent = managedCategories.loading ? 'Loading categories…' : managedCategories.items.length + ' categor' + (managedCategories.items.length === 1 ? 'y' : 'ies');
+    if (managedCategories.loading) {
+      results.innerHTML = '<div class="table-skeleton">' + Array.from({ length: 5 }).map(function () { return '<div class="skeleton-row"><span></span><span></span><span></span><span></span></div>'; }).join('') + '</div>';
+      return;
+    }
+    if (managedCategories.error) {
+      results.innerHTML = '<div class="empty catalogue-error"><b>Categories could not be loaded.</b><span>' + esc(managedCategories.error) + '</span><button class="secondary" id="retry-managed-categories">Try again</button></div>';
+      document.getElementById('retry-managed-categories').addEventListener('click', loadManagedCategories);
+      return;
+    }
+    if (!managedCategories.items.length) {
+      results.innerHTML = '<div class="empty">No categories yet. Categories are created from the product form.</div>';
+      return;
+    }
+    results.innerHTML = '<table><thead><tr><th>Category</th><th>Status</th><th>Products</th><th>Action</th></tr></thead><tbody>' + managedCategories.items.map(function (category) {
+      var blocked = category.productCount > 0;
+      return '<tr><td><b>' + esc(category.name) + '</b></td><td>' + badge(category.isActive ? 'Active' : 'Inactive') + '</td><td>' + category.productCount + '</td><td><button class="table-action delete-action" data-delete-category="' + category.id + '" ' + (blocked ? 'disabled aria-disabled="true" title="Remove or reassign every active and inactive product first."' : '') + '>Delete</button>' + (blocked ? '<br><small>Category is in use</small>' : '') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+    results.querySelectorAll('[data-delete-category]:not([disabled])').forEach(function (button) {
+      button.addEventListener('click', function () { renderCategoryDeleteConfirmation(button.dataset.deleteCategory); });
+    });
+  }
+
+  function renderCategoryDeleteConfirmation(categoryId) {
+    var category = managedCategories.items.find(function (entry) { return String(entry.id) === String(categoryId); });
+    if (!category || category.productCount > 0) return toast('Only an empty category can be deleted.');
+    modal('<form id="delete-category-form"><div class="modal-head"><div><p class="eyebrow">Delete category</p><h2>' + esc(category.name) + '</h2></div><button class="icon-btn" id="close-modal" type="button" aria-label="Close">×</button></div><p class="subtext"><b>"' + esc(category.name) + '" Category ကို အပြီးဖျက်မှာ သေချာပါသလား?</b><br>This cannot be undone. The database will check the product count again before deleting.</p><div class="two-button"><button class="secondary" id="cancel-delete-category" type="button">Cancel</button><button class="primary" type="submit">Delete category</button></div></form>');
+    document.getElementById('cancel-delete-category').addEventListener('click', closeModal);
+    document.getElementById('delete-category-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var button = event.target.querySelector('button[type="submit"]');
+      button.disabled = true;
+      button.textContent = 'Deleting…';
+      try {
+        await categoryService.deleteEmpty(category.id);
+        if (String(ownerCatalogue.categoryId) === String(category.id)) ownerCatalogue.categoryId = '';
+        if (String(customerCategory) === String(category.id)) customerCategory = 'All';
+        await loadCatalogueData();
+        closeModal();
+        await loadManagedCategories();
+        toast('Category deleted successfully. Product forms and filters are refreshed.');
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = 'Delete category';
+        var message = error.code === '23503' || /product|in use/i.test(error.message || '')
+          ? 'This category now contains a product and cannot be deleted. Refresh and try again.'
+          : (error.message || 'Category could not be deleted.');
+        toast(message);
+        await loadManagedCategories();
+      }
+    });
   }
 
   async function loadOwnerProducts(reset) {
@@ -1017,6 +1095,7 @@
     var voucherSettings = document.getElementById('voucher-settings'); if (voucherSettings) voucherSettings.addEventListener('submit', saveVoucherSettings);
     var download = document.getElementById('download-backup'); if (download) download.addEventListener('click', downloadBackup);
     var restore = document.getElementById('restore-backup'); if (restore) restore.addEventListener('change', restoreBackup);
+    if (document.getElementById('managed-category-results')) loadManagedCategories();
     var ownerProductSearch = document.getElementById('owner-product-search');
     var ownerProductCategory = document.getElementById('owner-product-category');
     var ownerProductStatus = document.getElementById('owner-product-status');
