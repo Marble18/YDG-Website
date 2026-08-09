@@ -80,7 +80,21 @@ body.dark-mode {
 .customer-hero p { color: var(--muted); max-width: 540px; margin: 12px 0 0; line-height: 1.5; }
 .search { border: 1px solid var(--line); background: white; border-radius: 10px; width: min(100%, 268px); padding: 11px 13px; outline-color: var(--wine); }
 .category-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+.customer-main .category-filters {
+  position: sticky;
+  top: 70px;
+  z-index: 4;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  padding: 10px 2px;
+  background: var(--cream);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 8px 14px rgba(64, 22, 42, .06);
+}
 .category-filter { color: var(--muted); background: white; border: 1px solid var(--line); border-radius: 99px; padding: 8px 13px; font-size: 13px; font-weight: 700; }
+.customer-main .category-filter { flex: 0 0 auto; white-space: nowrap; }
 .category-filter:hover, .category-filter.active { color: white; background: var(--wine); border-color: var(--wine); }
 .section-title { display: flex; justify-content: space-between; align-items: end; margin: 37px 0 17px; }
 .section-title h2 { font: 700 25px "Playfair Display", serif; margin: 0; }
@@ -177,6 +191,7 @@ td { padding: 12px 10px; border-top: 1px solid #f2ebed; vertical-align: middle; 
 .action-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .table-action { color: var(--wine); background: var(--rose); border: 0; border-radius: 7px; padding: 6px 8px; font-size: 11px; font-weight: 700; }
 .table-action.delete-action { color: var(--red); background: #fbe8eb; }
+.table-action:disabled { cursor: not-allowed; opacity: .48; }
 .status-select { min-width: 112px; border: 1px solid var(--line); padding: 6px; border-radius: 7px; color: var(--ink); background: #fff; font-size: 12px; }
 
 .modal-backdrop { position: fixed; z-index: 20; inset: 0; background: rgba(39, 25, 34, .38); display: grid; place-items: center; padding: 18px; }
@@ -338,6 +353,7 @@ body.dark-mode .inline-error { background: #3d242c; color: #f2b5c4; }
   .customer-hero { display: block; padding: 26px; }
   .customer-hero .search { margin-top: 20px; }
   .product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+  .customer-main .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .product-photo { height: 88px; }
   .product-info { padding: 10px; }
   .product-category { font-size: 9px; }

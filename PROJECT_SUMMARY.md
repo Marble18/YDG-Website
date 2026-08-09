@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 ## 1. Project goal
 
@@ -41,6 +41,10 @@ Yadanar Theingi Stationery & Fancy အတွက် မြန်မာအသု�
 - Customer Catalogue and Owner Products use database-side category filters, debounced name search, an exact result count and stable `created_at, id` pagination with 20 products per request.
 - Product images use native lazy loading. Catalogue screens include loading skeletons, empty results, retryable errors and Load More states for desktop and mobile.
 - Excel export deliberately uses a separate paged full-result fetch because exporting all matching rows is an explicit owner action; normal catalogue pages never fetch all products.
+- PR #12 adds a manager Categories page for active owners and staff. It lists active/inactive status and a database-counted total covering both active and inactive products.
+- Empty-category deletion is exposed only through an authenticated RPC. The RPC locks the category, re-counts products inside the database transaction and deletes only when the count remains zero.
+- The products-to-categories foreign key uses `ON DELETE RESTRICT`; categories never cascade-delete, auto-delete or auto-move products.
+- The customer category button row alone is sticky below the 70 px top navigation. The collection heading/result count scroll normally, while the button row remains horizontally touch-scrollable and keyboard accessible. Customer catalogue cards use a two-column grid at the mobile breakpoint without changing Owner Products.
 
 ### Database and Storage
 
@@ -95,6 +99,7 @@ First-version decision:
 - Order status transitions are server-enforced and forward-only: Pending → Approved → Processing → Ready to Ship → Delivered. Customers cannot change status.
 - Active staff share operational product, inventory, order, voucher and customer-account actions with the owner. Owner identity, owner/staff account management, Settings and project security controls remain owner-only.
 - Staff authorization is enforced from the authenticated profile (`role in ('owner','staff')` and `is_active = true`) inside RLS, RPCs and the account-admin Edge Function; frontend visibility is not an authorization boundary.
+- Category listing/deletion RPCs use the same active owner/staff server-side authorization. Anonymous, customers and disabled staff are denied; direct authenticated table deletion remains revoked.
 - The primary owner and all owner/staff targets are protected from staff account actions server-side. Staff can list, create, reset and enable/disable customer accounts only and cannot create/promote staff or owner accounts.
 - PR #10 database contract treats `order_items.quantity` as the immutable requested quantity. The legacy `allocated_quantity` column is retained only for migration compatibility and historical audit; new rows remain `0`, and application logic does not read or write it.
 - Requested audit snapshots remain in `quantity`, `unit_price`, `line_total` and `orders.total`; owner-managed final values are stored separately in `confirmed_quantity`, `confirmed_unit_price`, `confirmed_line_total` and `orders.confirmed_total`.
@@ -134,7 +139,7 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Validate and merge PR #11 production stabilization and staff operational permissions.
+1. Validate PR #12 safe category deletion and sticky customer category bar in Deploy Preview, then merge only after approval.
 2. Complete private delivery-proof Storage flow.
 3. Move remaining voucher/settings and backup behavior away from browser-only state where appropriate.
 4. Add browser/mobile regression checks and a production-grade database plus Storage backup procedure.
@@ -174,3 +179,5 @@ First-version decision:
 - 2026-08-07: PR #10 added short public order numbers with deterministic legacy backfill, atomic Yangon-date daily sequencing, server-enforced forward status transitions, and database-side Owner Orders status/search filtering with 20-row stable pagination and supporting indexes. Production deployment remains blocked pending approval.
 - 2026-08-08: PR #10 merged as `990c3af`; GitHub deployment and Cloudflare build checks completed successfully.
 - 2026-08-08: PR #11 production stabilization fixed the voucher blank-print root cause with a dedicated print document, added verified A4/A5 multi-page layouts, retained status-aware confirmed totals and image containment, and introduced active-staff operational permissions with server-side primary-owner protection. Migration `202608080001` and the updated account-admin Edge Function were deployed to the linked Supabase project; DB lint and anonymous denial passed. Deploy Preview role/manual tests remain before merge.
+- 2026-08-09: Verified PR #11 merged as `4f9fe7b` with successful production deployment checks. Started PR #12 on `codex/pr12-category-management`: active owner/staff category management, database-counted safe deletion with row locking and restrictive FK behavior, and a customer-only sticky horizontal category bar. Automated/local validation and Deploy Preview manual tests remain before merge.
+- 2026-08-09: PR #12 migrations `202608090001` and `202608090002` were applied to the linked Supabase project after a successful dry-run. Remote DB lint is clean, remote migration state is current, and anonymous list/delete RPC calls return `401`. Local desktop/mobile computed-style checks confirm the category row sticks at 70 px below navigation, scrolls horizontally on mobile and remains below menus/modals. Deploy Preview still needs active-owner, active-staff, disabled-staff, product-dependent deletion and catalogue regression testing before merge.
