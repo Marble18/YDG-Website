@@ -44,7 +44,7 @@ Yadanar Theingi Stationery & Fancy အတွက် မြန်မာအသု�
 - PR #12 adds a manager Categories page for active owners and staff. It lists active/inactive status and a database-counted total covering both active and inactive products.
 - Empty-category deletion is exposed only through an authenticated RPC. The RPC locks the category, re-counts products inside the database transaction and deletes only when the count remains zero.
 - The products-to-categories foreign key uses `ON DELETE RESTRICT`; categories never cascade-delete, auto-delete or auto-move products.
-- The customer category button row alone is sticky below the 70 px top navigation. The collection heading/result count scroll normally, while the button row remains horizontally touch-scrollable and keyboard accessible.
+- The customer category button row alone is sticky below the 70 px top navigation. The collection heading/result count scroll normally, while the button row remains horizontally touch-scrollable and keyboard accessible. Customer catalogue cards use a two-column grid at the mobile breakpoint without changing Owner Products.
 
 ### Database and Storage
 
