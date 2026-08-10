@@ -361,3 +361,16 @@ td { padding: 12px 10px; border-top: 1px solid var(--line); vertical-align: midd
   .page-heading { align-items: start; flex-direction: column; }
   .customer-hero h1, .page-heading h1 { font-size: 28px; }
 }
+
+.delivery-proof-panel { align-items: center; background: #fff5f8; border: 1px solid var(--line); border-radius: 14px; display: flex; gap: 16px; justify-content: space-between; margin: 18px 0; padding: 14px; }
+.delivery-proof-panel p { margin: 0; }
+.proof-lightbox { align-items: center; background: #f8f5f6; border-radius: 14px; display: flex; justify-content: center; min-height: min(65vh, 520px); overflow: hidden; }
+.proof-lightbox img { height: auto; max-height: 70vh; max-width: 100%; object-fit: contain; width: auto; }
+.proof-loading { color: var(--muted); padding: 28px; text-align: center; }
+.voucher-proof-recorded { font-size: 12px; font-weight: 700; margin: 12px 0 0; }
+
+@media (max-width: 640px) {
+  .delivery-proof-panel { align-items: stretch; flex-direction: column; }
+  .delivery-proof-panel .action-row { display: grid; grid-template-columns: 1fr; }
+  .proof-lightbox { min-height: 52vh; }
+}
