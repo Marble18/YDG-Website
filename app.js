@@ -14,6 +14,7 @@
   var productCatalogueService = window.createProductCatalogueService(supabaseClient);
   var categoryService = window.createCategoryService(supabaseClient);
   var orderService = window.createOrderService(supabaseClient);
+  var deliveryProofService = window.createDeliveryProofService(supabaseClient);
   var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
   var currentUser = null;
@@ -254,6 +255,7 @@
   }
 
   function mapDatabaseOrder(row) {
+    var proof = Array.isArray(row.delivery_proofs) ? row.delivery_proofs[0] : row.delivery_proofs;
     return {
       id: row.id, orderNumber: row.order_number || 'Order', customerId: row.customer_id,
       customer: row.profiles ? (row.profiles.full_name || row.profiles.username) : 'Customer',
@@ -267,7 +269,10 @@
       total: Number(row.total), confirmedTotal: nullableNumber(row.confirmed_total), status: formatOrderStatus(row.status),
       date: new Date(row.created_at).toLocaleDateString('en-GB'), phone: row.contact_phone || '', address: row.delivery_address || '',
       busStation: row.bus_station || '', deliveryDate: row.preferred_delivery_date || '', note: row.customer_note || '',
-      proofOfDelivery: row.delivery_proof_url || '',
+      deliveryProof: proof ? {
+        id: proof.id, objectPath: proof.object_path, mimeType: proof.mime_type,
+        fileSize: Number(proof.file_size), uploadedAt: proof.uploaded_at, note: proof.note || ''
+      } : null,
       adjusted: (row.order_items || []).some(function (item) { return Number(item.confirmed_quantity) !== Number(item.quantity); })
     };
   }
@@ -773,7 +778,8 @@
       var product = getProduct(item.productId);
       return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
+    modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + deliveryProofPanel(order, !isCustomer) + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
+    bindDeliveryProofActions(order);
     var viewVoucher = document.getElementById('view-voucher');
     if (viewVoucher) viewVoucher.addEventListener('click', function () { renderVoucher(order.id); });
   }
@@ -856,7 +862,7 @@
       var nextStatuses = { Pending: 'Approved', Approved: 'Processing', Processing: 'Ready to Ship', 'Ready to Ship': 'Delivered' };
       var nextStatus = nextStatuses[order.status];
       var control = editable ? '<select class="status-select" aria-label="Status for ' + esc(order.orderNumber) + '" data-status="' + order.id + '" ' + (!nextStatus ? 'disabled' : '') + '><option value="' + esc(order.status) + '" selected>' + esc(order.status) + '</option>' + (nextStatus ? '<option value="' + nextStatus + '">' + nextStatus + '</option>' : '') + '</select>' : badge(order.status);
-      return '<tr><td><span class="order-id">' + esc(order.orderNumber || 'Order') + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(visibleOrderTotal(order)) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button></div></td>' : '') + '</tr>';
+      return '<tr><td><span class="order-id">' + esc(order.orderNumber || 'Order') + '</span><br><small>' + order.date + '</small></td><td><b>' + esc(order.customer) + '</b><br><small>' + esc(order.phone || 'No phone') + '</small></td><td>' + orderCount(order) + (order.adjusted ? '<br><small>Adjusted</small>' : '') + '</td><td>' + money(visibleOrderTotal(order)) + '</td><td>' + control + '</td>' + (editable ? '<td><div class="action-row"><button class="table-action" data-owner-order-view="' + order.id + '">View</button><button class="table-action" data-owner-voucher="' + order.id + '">Voucher</button>' + (order.status === 'Delivered' ? '<button class="table-action" data-owner-proof="' + order.id + '">Proof</button>' : '') + '</div></td>' : '') + '</tr>';
     }).join('') + '</tbody></table>';
   }
 
@@ -891,6 +897,7 @@
     root.querySelectorAll('[data-status]').forEach(function (select) { select.addEventListener('change', function () { updateStatus(select.dataset.status, select.value); }); });
     root.querySelectorAll('[data-owner-order-view]').forEach(function (button) { button.addEventListener('click', function () { renderTransactionalOwnerOrderModal(button.dataset.ownerOrderView); }); });
     root.querySelectorAll('[data-owner-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.ownerVoucher); }); });
+    root.querySelectorAll('[data-owner-proof]').forEach(function (button) { button.addEventListener('click', function () { renderOrderDetails(button.dataset.ownerProof); }); });
   }
 
   function productsPage() {
@@ -1209,6 +1216,7 @@
   async function updateStatus(orderId, status) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order) return;
+    if (status === 'Delivered') return renderProofForm(orderId, true);
     var previousStatus = order.status;
     order.status = status;
     renderOwnerOrderResults();
@@ -1220,6 +1228,64 @@
       renderOwnerOrderResults();
       toast(error.message || 'Order status could not be updated.');
     }
+  }
+
+  function deliveryProofPanel(order, canManage) {
+    if (order.status !== 'Delivered') return '';
+    var recorded = order.deliveryProof
+      ? '<p><b>Delivery proof recorded</b><br><small>' + new Date(order.deliveryProof.uploadedAt).toLocaleString() + '</small></p>'
+      : '<p><b>No delivery proof</b><br><small>A proof photo is optional.</small></p>';
+    return '<section class="delivery-proof-panel"><div>' + recorded + '</div><div class="action-row">' +
+      (order.deliveryProof ? '<button class="secondary" type="button" data-view-proof="' + order.id + '">View proof</button>' : '') +
+      (canManage ? '<button class="secondary" type="button" data-manage-proof="' + order.id + '">' + (order.deliveryProof ? 'Replace proof' : 'Upload proof') + '</button>' : '') +
+      (canManage && order.deliveryProof ? '<button class="danger" type="button" data-remove-proof="' + order.id + '">Remove proof</button>' : '') +
+      '</div></section>';
+  }
+
+  function bindDeliveryProofActions(order) {
+    var view = document.querySelector('[data-view-proof="' + order.id + '"]');
+    if (view) view.addEventListener('click', function () { renderDeliveryProofLightbox(order); });
+    var manage = document.querySelector('[data-manage-proof="' + order.id + '"]');
+    if (manage) manage.addEventListener('click', function () { renderProofForm(order.id, false); });
+    var remove = document.querySelector('[data-remove-proof="' + order.id + '"]');
+    if (remove) remove.addEventListener('click', async function () {
+      if (!window.confirm('Remove the delivery proof from this order?')) return;
+      remove.disabled = true; remove.textContent = 'Removing...';
+      try {
+        var result = await deliveryProofService.remove(order.id);
+        await loadOwnerOrders(true); closeModal(); renderAdminPage();
+        toast(result.cleanupWarning ? 'Proof removed. The old file needs a later cleanup review.' : 'Delivery proof removed.');
+      } catch (error) {
+        remove.disabled = false; remove.textContent = 'Remove proof';
+        toast(error.message || 'Delivery proof could not be removed.');
+      }
+    });
+  }
+
+  function renderDeliveryProofLightbox(order) {
+    modal('<div class="modal-head"><div><p class="eyebrow">Private delivery proof</p><h2>' + esc(order.orderNumber) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="proof-lightbox" id="proof-lightbox" aria-live="polite"><div class="proof-loading">Loading secure image...</div></div><div class="two-button"><button class="secondary" id="retry-proof" type="button">Retry</button></div>');
+    async function load() {
+      var target = document.getElementById('proof-lightbox');
+      var retry = document.getElementById('retry-proof');
+      if (!target || !retry) return;
+      retry.hidden = true; retry.disabled = true;
+      target.innerHTML = '<div class="proof-loading">Loading secure image...</div>';
+      try {
+        var url = await deliveryProofService.signedUrl(order.deliveryProof);
+        if (!document.getElementById('proof-lightbox')) return;
+        target.innerHTML = '<img src="' + esc(url) + '" alt="Delivery proof for ' + esc(order.orderNumber) + '">';
+        var image = target.querySelector('img');
+        image.addEventListener('error', function () {
+          target.innerHTML = '<div class="inline-error">The secure image expired or could not be loaded.</div>';
+          retry.hidden = false; retry.disabled = false;
+        });
+      } catch (error) {
+        target.innerHTML = '<div class="inline-error">Delivery proof could not be loaded.</div>';
+        retry.hidden = false; retry.disabled = false;
+      }
+    }
+    document.getElementById('retry-proof').addEventListener('click', load);
+    load();
   }
 
   function renderOwnerOrderModal(orderId, activeTab) {
@@ -1339,23 +1405,49 @@
     });
   }
 
-  function renderProofForm(orderId) {
+  function renderProofForm(orderId, markDelivered) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
-    modal('<form id="proof-form"><div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Proof of delivery</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">A delivery photo is optional. You can mark this order as Delivered with or without a photo.</p><label class="field">Proof photo (optional)<input id="proof-photo" type="file" accept="image/*"></label><p class="photo-help">For this demo, keep the photo below 1.5 MB.</p><div class="photo-upload-preview" id="proof-preview"><div class="photo-placeholder"><span>Proof photo</span><small>Add a photo only if needed</small></div></div><div class="two-button"><button class="primary" type="submit">Mark Delivered</button></div></form>');
+    if (!order || !['owner', 'staff'].includes(currentUser.role)) return;
+    var action = markDelivered ? 'Mark Delivered' : (order.deliveryProof ? 'Replace proof' : 'Upload proof');
+    modal('<form id="proof-form"><div class="modal-head"><div><p class="eyebrow">' + esc(order.orderNumber) + '</p><h2>Private delivery proof</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">A delivery photo is optional. It stays private and is shown only to authorized staff and this customer.</p><label class="field">Proof photo' + (markDelivered ? ' (optional)' : '') + '<input id="proof-photo" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" ' + (markDelivered ? '' : 'required') + '></label><p class="photo-help">JPEG, PNG or WebP · Maximum 5 MB</p><div class="photo-upload-preview" id="proof-preview"><div class="photo-placeholder"><span>Private proof</span><small>Choose a photo to preview it</small></div></div><label class="field">Private note (optional)<textarea id="proof-note" maxlength="500" rows="2"></textarea></label><p class="export-status" id="proof-status" aria-live="polite">No file has been uploaded yet.</p><div class="two-button"><button class="primary" id="save-proof" type="submit">' + action + '</button></div></form>');
+    var selectedUrl = '';
     document.getElementById('proof-photo').addEventListener('change', function (event) {
       var file = event.target.files[0];
+      if (selectedUrl) URL.revokeObjectURL(selectedUrl);
       if (!file) return;
-      if (file.size > 1500000) { event.target.value = ''; return toast('Choose a proof photo smaller than 1.5 MB for this demo.'); }
-      imageToDataUrl(file).then(function (src) { document.getElementById('proof-preview').innerHTML = '<img src="' + esc(src) + '" alt="Proof preview">'; });
+      try { deliveryProofService.validateFile(file); }
+      catch (error) { event.target.value = ''; return toast(error.message); }
+      selectedUrl = URL.createObjectURL(file);
+      document.getElementById('proof-preview').innerHTML = '<img src="' + esc(selectedUrl) + '" alt="Selected delivery proof preview">';
+      document.getElementById('proof-status').textContent = file.name + ' is ready to upload.';
     });
     document.getElementById('proof-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var file = document.getElementById('proof-photo').files[0];
-      if (file) {
-        try { order.proofOfDelivery = await imageToDataUrl(file); } catch (error) { return toast('The proof photo could not be saved.'); }
+      var button = document.getElementById('save-proof');
+      var status = document.getElementById('proof-status');
+      button.disabled = true; button.textContent = 'Saving...'; status.textContent = 'Saving the private proof securely...';
+      try {
+        var cleanupWarning = false;
+        if (file) {
+          var result = await deliveryProofService.uploadAndSave(order.id, file, {
+            note: document.getElementById('proof-note').value,
+            markDelivered: markDelivered
+          });
+          cleanupWarning = result.cleanupWarning;
+        } else if (markDelivered) {
+          await orderService.updateStatus(order.id, 'delivered');
+        } else {
+          throw new Error('Choose a proof photo.');
+        }
+        if (selectedUrl) URL.revokeObjectURL(selectedUrl);
+        await loadOwnerOrders(true); closeModal(); renderAdminPage();
+        toast(cleanupWarning ? 'New proof saved. The replaced file needs a later cleanup review.' : (file ? 'Private delivery proof saved.' : 'Order marked Delivered without a proof photo.'));
+      } catch (error) {
+        button.disabled = false; button.textContent = action;
+        status.className = 'export-status error';
+        status.textContent = error.cleanupWarning ? 'Save failed and uploaded-file cleanup needs review.' : (error.message || 'Delivery proof could not be saved.');
       }
-      order.status = 'Delivered'; order.deliveredAt = new Date().toLocaleString();
-      saveState(); closeModal(); renderAdminPage(); toast(file ? 'Proof saved and order marked Delivered.' : 'Order marked Delivered without a proof photo.');
     });
   }
 
@@ -1830,7 +1922,7 @@
       var product = getProduct(item.productId);
       return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
-    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || 'Order') + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>Order date: ' + order.date + '</small>' + (order.deliveryDate ? '<small>Delivery date: ' + esc(order.deliveryDate) + '</small>' : '') + '</div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.proofOfDelivery ? '<div class="voucher-proof"><span>Proof of delivery</span><img src="' + esc(order.proofOfDelivery) + '" alt="Proof of delivery"></div>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
+    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || 'Order') + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>Order date: ' + order.date + '</small>' + (order.deliveryDate ? '<small>Delivery date: ' + esc(order.deliveryDate) + '</small>' : '') + '</div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.deliveryProof ? '<p class="voucher-proof-recorded">Delivery proof recorded</p>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
     var savedPaper = localStorage.getItem('yadanar-voucher-paper-size') || 'a4';
     var printButton = document.getElementById('print-voucher');
     printButton.insertAdjacentHTML('beforebegin', '<label class="voucher-print-size">Print size<select id="voucher-paper-size"><option value="a4" ' + (savedPaper === 'a4' ? 'selected' : '') + '>A4</option><option value="a5" ' + (savedPaper === 'a5' ? 'selected' : '') + '>A5</option></select></label>');

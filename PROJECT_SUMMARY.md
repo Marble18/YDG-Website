@@ -116,6 +116,11 @@ First-version decision:
 - Stock-independent ordering accepts shortages. Checkout and owner confirmation never validate against, reduce or allocate product stock and never create inventory movements, so an order cannot make stock negative. Owner inventory tools remain the source of stock changes.
 - Cart writes and checkout use authenticated, active-customer RPCs. The browser-supplied customer ID, price, unit, minimum, product status and total are never accepted.
 - Delivery proofs stay private; only the related customer and authorized owner/staff may access them.
+- PR #14 replaces the legacy browser/data-URL proof with a private `delivery-proofs` Storage object plus one current `delivery_proofs` metadata row per order. Object paths use `orders/{order_uuid}/{random_uuid}.{mime-derived-extension}` and contain no customer name, filename or other PII.
+- Active owner/staff can optionally upload while marking a Ready-to-Ship order Delivered, or upload/replace/remove on an existing Delivered order. The database rechecks the active manager role, order/status, exact path, allowed MIME and 5 MB limit; direct metadata writes are revoked.
+- Customers can read metadata and create a short-lived signed URL only for their own order. Other customers, anonymous users and disabled staff are denied by both table RLS and exact-object Storage policies. Signed URLs are generated on demand for 120 seconds and are never persisted or logged.
+- Failed metadata/status persistence triggers an exact-path cleanup of the new upload. Replacement swaps metadata first and then deletes only the previous exact object; a failed old-object cleanup preserves the new proof and surfaces a review warning.
+- Voucher screen and A4/A5 print output never contain the private image, signed URL or Storage path. They show only `Delivery proof recorded` when metadata exists.
 - Do not restore authentication, roles or passwords from browser backup JSON.
 - Publishable key is public only with correct RLS/Storage policies; secret/service-role keys are never public.
 
@@ -148,8 +153,8 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Validate PR #13 soft-pink light-only theme and Dark Mode retirement in Deploy Preview, then merge only after approval.
-2. Complete private delivery-proof Storage flow.
+1. Validate and merge PR #14 private delivery-proof Storage flow after Deploy Preview authorization tests.
+2. Confirm production remains on the merged PR #13 light-only build until PR #14 receives explicit approval.
 3. Move remaining voucher/settings and backup behavior away from browser-only state where appropriate.
 4. Add browser/mobile regression checks and a production-grade database plus Storage backup procedure.
 
@@ -191,3 +196,4 @@ First-version decision:
 - 2026-08-09: Verified PR #11 merged as `4f9fe7b` with successful production deployment checks. Started PR #12 on `codex/pr12-category-management`: active owner/staff category management, database-counted safe deletion with row locking and restrictive FK behavior, and a customer-only sticky horizontal category bar. Automated/local validation and Deploy Preview manual tests remain before merge.
 - 2026-08-09: PR #12 migrations `202608090001` and `202608090002` were applied to the linked Supabase project after a successful dry-run. Remote DB lint is clean, remote migration state is current, and anonymous list/delete RPC calls return `401`. Local desktop/mobile computed-style checks confirm the category row sticks at 70 px below navigation, scrolls horizontally on mobile and remains below menus/modals. Deploy Preview still needs active-owner, active-staff, disabled-staff, product-dependent deletion and catalogue regression testing before merge.
 - 2026-08-10: Verified PR #12 merged as `05c8362` with successful build/deploy/Workers checks. Started PR #13 on `codex/pr13-soft-pink-theme`: soft-pink light-only palette, complete Dark Mode UI/CSS/JavaScript retirement, safe stale-theme Local Storage cleanup, accessible interactive contrast/focus decisions and print-safe voucher overrides. Local visual/regression validation and Deploy Preview manual tests remain before merge.
+- 2026-08-10: Verified PR #13 merged as `3d23edb`. PR #14 migration `202608100001` was dry-run, linted clean and applied to the linked project. It adds private Storage enforcement, one-current-proof metadata/RLS, server-authorized upload/replace/remove RPCs, exact-path cleanup, short-lived authorized viewing, an accessible mobile lightbox and print-safe recorded-only voucher output. Anonymous metadata/RPC requests return `401`; active owner/staff/customer cross-account and failure-path tests remain for Deploy Preview before merge.
