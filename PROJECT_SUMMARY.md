@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 ## 1. Project goal
 
@@ -45,6 +45,15 @@ Yadanar Theingi Stationery & Fancy အတွက် မြန်မာအသု�
 - Empty-category deletion is exposed only through an authenticated RPC. The RPC locks the category, re-counts products inside the database transaction and deletes only when the count remains zero.
 - The products-to-categories foreign key uses `ON DELETE RESTRICT`; categories never cascade-delete, auto-delete or auto-move products.
 - The customer category button row alone is sticky below the 70 px top navigation. The collection heading/result count scroll normally, while the button row remains horizontally touch-scrollable and keyboard accessible. Customer catalogue cards use a two-column grid at the mobile breakpoint without changing Owner Products.
+
+### Visual theme
+
+- PR #13 retires Dark Mode for Customer, Owner and Staff. The application is light-only and removes the customer theme control, toggle handlers and all dark-theme CSS overrides.
+- Application startup removes the retired `yt-theme-v2` Local Storage value and any stale `body.dark-mode` class before rendering, so refresh/login cannot restore a dark interface.
+- Final palette: primary pink `#D96C91`, accessible interactive pink `#B84F73`, strong hover pink `#9F3D61`, page `#FFF8FA`, surface `#FFFFFF`, soft surface `#FCEAF0`, border `#EED8E0`, text `#35252D`, muted `#74636B`.
+- Normal-size white button text uses `#B84F73` (4.77:1 contrast) instead of `#D96C91` (3.23:1). `#D96C91` remains the requested decorative/default voucher accent. Error, warning and success colors remain semantic red, amber and green.
+- Global keyboard focus uses a visible three-pixel pink focus ring. Inputs also receive an accessible border and focus halo; disabled controls remain visibly distinct.
+- Voucher screen styling follows the light palette while the owner-selected voucher accent remains functional. Print output explicitly forces a white background and dark ink and retains the existing A4/A5 layout and confirmed-value contract.
 
 ### Database and Storage
 
@@ -139,7 +148,7 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Validate PR #12 safe category deletion and sticky customer category bar in Deploy Preview, then merge only after approval.
+1. Validate PR #13 soft-pink light-only theme and Dark Mode retirement in Deploy Preview, then merge only after approval.
 2. Complete private delivery-proof Storage flow.
 3. Move remaining voucher/settings and backup behavior away from browser-only state where appropriate.
 4. Add browser/mobile regression checks and a production-grade database plus Storage backup procedure.
@@ -181,3 +190,4 @@ First-version decision:
 - 2026-08-08: PR #11 production stabilization fixed the voucher blank-print root cause with a dedicated print document, added verified A4/A5 multi-page layouts, retained status-aware confirmed totals and image containment, and introduced active-staff operational permissions with server-side primary-owner protection. Migration `202608080001` and the updated account-admin Edge Function were deployed to the linked Supabase project; DB lint and anonymous denial passed. Deploy Preview role/manual tests remain before merge.
 - 2026-08-09: Verified PR #11 merged as `4f9fe7b` with successful production deployment checks. Started PR #12 on `codex/pr12-category-management`: active owner/staff category management, database-counted safe deletion with row locking and restrictive FK behavior, and a customer-only sticky horizontal category bar. Automated/local validation and Deploy Preview manual tests remain before merge.
 - 2026-08-09: PR #12 migrations `202608090001` and `202608090002` were applied to the linked Supabase project after a successful dry-run. Remote DB lint is clean, remote migration state is current, and anonymous list/delete RPC calls return `401`. Local desktop/mobile computed-style checks confirm the category row sticks at 70 px below navigation, scrolls horizontally on mobile and remains below menus/modals. Deploy Preview still needs active-owner, active-staff, disabled-staff, product-dependent deletion and catalogue regression testing before merge.
+- 2026-08-10: Verified PR #12 merged as `05c8362` with successful build/deploy/Workers checks. Started PR #13 on `codex/pr13-soft-pink-theme`: soft-pink light-only palette, complete Dark Mode UI/CSS/JavaScript retirement, safe stale-theme Local Storage cleanup, accessible interactive contrast/focus decisions and print-safe voucher overrides. Local visual/regression validation and Deploy Preview manual tests remain before merge.

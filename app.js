@@ -29,16 +29,15 @@
   var remoteCart = [];
   var checkoutKey = null;
   var activeVoucherPrint = null;
-  var THEME_STORAGE = 'yt-theme-v2';
-
-  applyTheme(localStorage.getItem(THEME_STORAGE) || 'light');
+  localStorage.removeItem('yt-theme-v2');
+  document.body.classList.remove('dark-mode');
 
   function seedState(settings) {
     return { products: [], users: [], orders: [], inventory: [], settings: settings || defaultSettings() };
   }
 
   function defaultSettings() {
-    return { maintenanceMode: false, backupFrequency: 'Weekly', lastBackup: '', voucher: { title: 'Delivery Voucher', footer: 'Thank you for shopping with Yadanar Theingi Stationery & Fancy.', accentColor: '#8c1740' } };
+    return { maintenanceMode: false, backupFrequency: 'Weekly', lastBackup: '', voucher: { title: 'Delivery Voucher', footer: 'Thank you for shopping with Yadanar Theingi Stationery & Fancy.', accentColor: '#D96C91' } };
   }
 
   function normalize(data) {
@@ -136,11 +135,6 @@
       clearTimeout(timer);
       timer = setTimeout(function () { callback.apply(null, args); }, wait);
     };
-  }
-
-  function applyTheme(theme) {
-    document.body.classList.toggle('dark-mode', theme === 'dark');
-    localStorage.setItem(THEME_STORAGE, theme);
   }
 
   function itemPrice(item) {
@@ -369,7 +363,7 @@
       minimumOrderQuantity: Number(row.minimum_order_quantity) || 1,
       photo: row.image_url || '',
       updatedAt: row.updated_at || null,
-      bg: '#f3e8ec',
+      bg: '#FCEAF0',
       deleted: !row.is_active
     };
   }
@@ -644,12 +638,10 @@
   }
 
   function renderCustomerMenu() {
-    var dark = document.body.classList.contains('dark-mode');
-    document.getElementById('customer-menu-root').innerHTML = '<div class="customer-menu-backdrop" id="close-customer-menu"></div><aside class="customer-menu-panel"><div class="customer-menu-head"><div><p class="eyebrow">Customer menu</p><h2>' + esc(currentUser.name) + '</h2></div><button class="icon-btn" id="close-customer-menu-button">×</button></div><button class="customer-menu-item" id="open-recent-orders"><span>Recent orders</span><small>Search order ID & view voucher</small></button><label class="theme-switch-row"><span><b>Dark mode</b><small>Change the display theme</small></span><input id="customer-theme-switch" type="checkbox" ' + (dark ? 'checked' : '') + '><span class="theme-switch"></span></label><button class="customer-menu-item danger" id="customer-menu-logout"><span>Log out</span><small>Sign out of this customer account</small></button></aside>';
+    document.getElementById('customer-menu-root').innerHTML = '<div class="customer-menu-backdrop" id="close-customer-menu"></div><aside class="customer-menu-panel"><div class="customer-menu-head"><div><p class="eyebrow">Customer menu</p><h2>' + esc(currentUser.name) + '</h2></div><button class="icon-btn" id="close-customer-menu-button">×</button></div><button class="customer-menu-item" id="open-recent-orders"><span>Recent orders</span><small>Search order ID & view voucher</small></button><button class="customer-menu-item danger" id="customer-menu-logout"><span>Log out</span><small>Sign out of this customer account</small></button></aside>';
     document.getElementById('close-customer-menu').addEventListener('click', closeCustomerMenu);
     document.getElementById('close-customer-menu-button').addEventListener('click', closeCustomerMenu);
     document.getElementById('open-recent-orders').addEventListener('click', function () { closeCustomerMenu(); renderRecentOrders(); });
-    document.getElementById('customer-theme-switch').addEventListener('change', function (event) { applyTheme(event.target.checked ? 'dark' : 'light'); });
     document.getElementById('customer-menu-logout').addEventListener('click', logout);
   }
 
