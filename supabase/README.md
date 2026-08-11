@@ -38,4 +38,12 @@ Deployment status: migration and both functions were deployed on 2026-08-05. The
 
 ## Rollback
 
-Do not restore authentication data from browser JSON backups. If a deployment must be rolled back, restore the previous frontend release and remove/disable the new Edge Functions. Review the migration before reversing its RLS changes; never drop user profiles or Auth users as a rollback shortcut.
+Browser JSON backup/restore is retired. Never import authentication data from an old browser snapshot. If a deployment must be rolled back, restore the previous frontend release and remove/disable the new Edge Functions. Review the migration before reversing its RLS changes; never drop user profiles or Auth users as a rollback shortcut.
+
+## PR #17 secure business backup
+
+Deploy `business-backup` with JWT verification enabled and apply migration `202608110002_secure_business_backup_restore.sql`. Only the earliest active owner can export or restore. Database backups use `ydg-business-backup-v1`, schema version `202608110002`, exact row counts and SHA-256 integrity. Restore first creates a 15-minute dry-run plan, then performs a merge/upsert in one database transaction and writes an idempotency audit row. It never deletes unrelated rows or overwrites the caller's owner profile.
+
+Private Storage objects are downloaded separately as a ZIP containing exact bucket paths, sizes, MIME types and per-object checksums. Database restore does not automatically upload this archive: Storage is outside the PostgreSQL transaction, so recovery must validate the manifest and use an explicit exact-path procedure with a compensation log. Never use wildcard deletion or treat these exports as a replacement for provider-level backups/PITR.
+
+Rollback: hide the UI and undeploy `business-backup`, then revoke/drop the preview/restore RPCs and helper after active plans expire. Retain `business_restore_audit` for history. No business rows need to be deleted for rollback.
