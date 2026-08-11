@@ -29,7 +29,7 @@ Open index.html in a modern browser.
 
 ## Important before launch
 
-Authentication, products, categories, inventory and product images now use Supabase. Orders, carts, customer management and several settings still require migration from browser Local Storage before the system is ready for real customers.
+Authentication, accounts, products, categories, inventory, carts, orders, private delivery proofs and shop/voucher settings use Supabase. Browser Local Storage is retained only for non-authoritative cache and local convenience snapshots; it is not a production backup.
 
 For the production version, add:
 

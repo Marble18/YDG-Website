@@ -15,6 +15,7 @@
   var categoryService = window.createCategoryService(supabaseClient);
   var orderService = window.createOrderService(supabaseClient);
   var deliveryProofService = window.createDeliveryProofService(supabaseClient);
+  var settingsService = window.createSettingsService(supabaseClient);
   var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
   var currentUser = null;
@@ -30,6 +31,7 @@
   var remoteCart = [];
   var checkoutKey = null;
   var activeVoucherPrint = null;
+  var settingsLoadError = '';
   localStorage.removeItem('yt-theme-v2');
   document.body.classList.remove('dark-mode');
 
@@ -88,6 +90,26 @@
     var fresh = normalize(seedState(preservedSettings || defaultSettings()));
     localStorage.setItem(STORAGE, JSON.stringify(fresh));
     return fresh;
+  }
+
+  async function loadRemoteSettings() {
+    try {
+      var remote = await settingsService.load();
+      var localSnapshotDate = state.settings.lastBackup || '';
+      state.settings = {
+        maintenanceMode: remote.maintenanceMode,
+        backupFrequency: remote.backupFrequency,
+        lastBackup: localSnapshotDate,
+        voucher: remote.voucher,
+        updatedAt: remote.updatedAt
+      };
+      localStorage.setItem(STORAGE, JSON.stringify(state));
+      settingsLoadError = '';
+      return true;
+    } catch (error) {
+      settingsLoadError = error.message || 'Shop settings could not be loaded.';
+      return false;
+    }
   }
 
   function autoBackupIfDue() {
@@ -1080,6 +1102,14 @@
   }
 
   function bindAdmin() {
+    if (settingsLoadError && adminPage === 'settings') {
+      var settingsContent = document.getElementById('admin-content');
+      settingsContent.insertAdjacentHTML('afterbegin', '<div class="inline-error" role="alert">Live settings could not be loaded. Cached values are shown and cannot overwrite the server. <button class="text-link" id="retry-shop-settings" type="button">Retry</button></div>');
+      document.getElementById('retry-shop-settings').addEventListener('click', async function () {
+        if (await loadRemoteSettings()) { renderAdminPage(); toast('Live settings reloaded.'); }
+        else toast(settingsLoadError);
+      });
+    }
     document.querySelectorAll('[data-go]').forEach(function (button) { button.addEventListener('click', function () { adminPage = button.dataset.go; renderAdminPage(); }); });
     bindOrderTableActions(document);
     document.querySelectorAll('[data-toggle-account]').forEach(function (button) { button.addEventListener('click', function () { updateAccountAccess(button.dataset.toggleAccount); }); });
@@ -1092,7 +1122,12 @@
     var newOwner = document.getElementById('new-owner'); if (newOwner) newOwner.addEventListener('click', function () { renderAccountForm('staff'); });
     var siteSettings = document.getElementById('site-settings'); if (siteSettings) siteSettings.addEventListener('submit', saveSiteSettings);
     var voucherSettings = document.getElementById('voucher-settings'); if (voucherSettings) voucherSettings.addEventListener('submit', saveVoucherSettings);
-    var download = document.getElementById('download-backup'); if (download) download.addEventListener('click', downloadBackup);
+    var download = document.getElementById('download-backup');
+    if (download) {
+      download.addEventListener('click', downloadBackup);
+      var backupNote = download.parentElement.querySelector('.photo-help');
+      if (backupNote) backupNote.textContent = 'This is a local convenience snapshot, not a production database or Storage backup. The frequency preference is shared across devices.';
+    }
     var restore = document.getElementById('restore-backup'); if (restore) restore.addEventListener('change', restoreBackup);
     if (document.getElementById('managed-category-results')) loadManagedCategories();
     var ownerProductSearch = document.getElementById('owner-product-search');
@@ -1801,12 +1836,22 @@
     });
   }
 
-  function saveSiteSettings(event) {
+  async function saveSiteSettings(event) {
     event.preventDefault();
     var data = new FormData(event.target);
-    state.settings.maintenanceMode = data.get('maintenance') === 'on';
-    state.settings.backupFrequency = data.get('backupFrequency');
-    saveState(); renderAdminPage(); toast('Site settings saved.');
+    var button = event.target.querySelector('button[type="submit"]');
+    button.disabled = true; button.textContent = 'Saving...';
+    try {
+      await settingsService.saveSite({
+        maintenanceMode: data.get('maintenance') === 'on',
+        backupFrequency: data.get('backupFrequency')
+      });
+      if (!await loadRemoteSettings()) throw new Error(settingsLoadError);
+      renderAdminPage(); toast('Site settings saved for every device.');
+    } catch (error) {
+      button.disabled = false; button.textContent = 'Save site settings';
+      toast(error.message || 'Site settings could not be saved.');
+    }
   }
 
   function voucherPreview(voucher) {
@@ -1818,11 +1863,20 @@
     preview.innerHTML = voucherPreview({ title: document.getElementById('voucher-title').value, accentColor: document.getElementById('voucher-color').value, footer: document.getElementById('voucher-footer').value });
   }
 
-  function saveVoucherSettings(event) {
+  async function saveVoucherSettings(event) {
     event.preventDefault();
     var data = new FormData(event.target);
-    state.settings.voucher = { title: data.get('title'), accentColor: data.get('color'), footer: data.get('footer') };
-    saveState(); toast('Voucher style saved.');
+    var button = event.target.querySelector('button[type="submit"]');
+    var voucher = { title: data.get('title').trim(), accentColor: data.get('color'), footer: data.get('footer').trim() };
+    button.disabled = true; button.textContent = 'Saving...';
+    try {
+      await settingsService.saveVoucher(voucher);
+      if (!await loadRemoteSettings()) throw new Error(settingsLoadError);
+      renderAdminPage(); toast('Voucher style saved for every device.');
+    } catch (error) {
+      button.disabled = false; button.textContent = 'Save voucher style';
+      toast(error.message || 'Voucher style could not be saved.');
+    }
   }
 
   function downloadBackup() {
@@ -1846,7 +1900,9 @@
         var restored = parsed.data || parsed;
         if (!restored.products || !restored.users || !restored.orders) throw new Error('invalid');
         localStorage.setItem(AUTO_BACKUP, JSON.stringify({ createdAt: new Date().toISOString(), data: state }));
+        var remoteSettings = state.settings;
         state = normalize(restored);
+        state.settings = remoteSettings;
         localStorage.setItem(STORAGE, JSON.stringify(state));
         if (currentUser) renderAdmin(); else renderLogin();
         toast('Backup restored successfully.');
@@ -1957,24 +2013,33 @@
   async function startApp() {
     document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-card"><h2>Loading…</h2><p class="subtext">Checking your secure session.</p></div></section>';
     try {
+      var settingsLoaded = await loadRemoteSettings();
       var sessionResult = await supabaseClient.auth.getSession();
       var session = sessionResult.data.session;
       if (passwordRecoveryMode && session) return renderPasswordRecovery();
-      if (!session) return renderLogin();
+      if (!session) {
+        renderLogin();
+        if (!settingsLoaded) toast('Live shop settings could not be loaded. Showing the last cached settings.');
+        return;
+      }
 
       currentUser = await loadAuthenticatedUser(session.user);
       if (currentUser.role === 'owner' || currentUser.role === 'staff') {
         await loadCatalogueData();
         await loadRemoteOrders();
         await loadManagedAccounts();
-        return renderAdmin();
+        renderAdmin();
+        if (!settingsLoaded) toast('Live shop settings could not be loaded. Cached values are shown.');
+        return;
       }
       if (currentUser.role === 'customer') {
         if (state.settings.maintenanceMode) throw new Error('Customer ordering is temporarily under maintenance.');
         await loadCatalogueData();
         await loadRemoteOrders();
         await migrateLegacyCartOnce();
-        return renderCustomer();
+        renderCustomer();
+        if (!settingsLoaded) toast('Live shop settings could not be loaded. Cached values are shown.');
+        return;
       }
       throw new Error('This account does not have access to the application.');
     } catch (error) {
