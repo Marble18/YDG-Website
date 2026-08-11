@@ -397,7 +397,10 @@ Deno.serve(async (request) => {
       const manifestCore = { application: 'Yadanar Theingi Ecommerce', formatVersion: 'ydg-storage-archive-v1', schemaVersion: SCHEMA_VERSION, createdAt: new Date().toISOString(), createdBy: auth.ownerId, partNumber: partIndex + 1, partCount: plan.partCount, objects: manifest }
       zip.file('manifest.json', JSON.stringify({ ...manifestCore, integrity: { algorithm: 'SHA-256', checksum: await checksum(manifestCore) } }, null, 2))
       const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' })
-      return new Response(bytes, { headers: { ...corsHeaders, 'Content-Type': 'application/zip', 'X-YDG-Part-Number': String(partIndex + 1), 'X-YDG-Part-Count': String(plan.partCount), 'Content-Disposition': `attachment; filename="ydg-storage-archive-${new Date().toISOString().slice(0, 10)}-part-${partIndex + 1}-of-${plan.partCount}.zip"` } })
+      // functions-js only preserves binary response bodies as a Blob for
+      // application/octet-stream. application/zip falls through to text(),
+      // which corrupts the ZIP central directory before the browser saves it.
+      return new Response(bytes, { headers: { ...corsHeaders, 'Content-Type': 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'X-YDG-Archive-Type': 'application/zip', 'X-YDG-Part-Number': String(partIndex + 1), 'X-YDG-Part-Count': String(plan.partCount), 'Content-Disposition': `attachment; filename="ydg-storage-archive-${new Date().toISOString().slice(0, 10)}-part-${partIndex + 1}-of-${plan.partCount}.zip"` } })
     }
 
     if (action === 'preview-storage-restore' || action === 'confirm-storage-restore') {

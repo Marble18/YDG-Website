@@ -1930,7 +1930,10 @@
       for (var partIndex = 0; partIndex < plan.partCount; partIndex++) {
         button.textContent = 'Downloading part ' + (partIndex + 1) + ' of ' + plan.partCount + '...';
         var archive = await businessBackupService.createStorageArchive(plan.planId, partIndex);
-        var blob = archive instanceof Blob ? archive : new Blob([archive], { type: 'application/zip' });
+        if (!(archive instanceof Blob) || !archive.size) {
+          throw new Error('Storage archive binary response was not received safely. No archive was downloaded; retry after refreshing the page.');
+        }
+        var blob = archive.slice(0, archive.size, 'application/zip');
         downloadBlob(blob, 'ydg-private-storage-' + new Date().toISOString().slice(0, 10) + '-part-' + (partIndex + 1) + '-of-' + plan.partCount + '.zip');
       }
       setBusinessBackupStatus('Downloaded ' + plan.partCount + ' private Storage archive part' + (plan.partCount === 1 ? '' : 's') + ' for ' + plan.totalFiles + ' files. Keep every part private and validate/restore each separately.');
