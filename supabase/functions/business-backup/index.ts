@@ -97,7 +97,9 @@ async function buildBackup(admin: ReturnType<typeof adminClient>, ownerId: strin
     data,
     storage,
   }
-  return { ...core, integrity: { algorithm: 'SHA-256', checksum: await checksum(core) } }
+  const backup = { ...core, integrity: { algorithm: 'SHA-256', checksum: await checksum(core) } }
+  await validateBackup(backup)
+  return backup
 }
 
 async function validateBackup(value: unknown) {
