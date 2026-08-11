@@ -26,3 +26,14 @@ export function publicClient() {
     { auth: { autoRefreshToken: false, persistSession: false } },
   )
 }
+
+export function userClient(token: string) {
+  return createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    firstConfiguredKey('SUPABASE_PUBLISHABLE_KEYS', 'SUPABASE_ANON_KEY'),
+    {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    },
+  )
+}

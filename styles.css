@@ -346,11 +346,12 @@ td { padding: 12px 10px; border-top: 1px solid var(--line); vertical-align: midd
   .card-footer { display: grid; grid-template-columns: 34px 1fr; gap: 5px; margin-top: 9px; }
   .qty-input { width: 34px; min-width: 0; padding: 3px; font-size: 11px; }
   .add-to-cart { padding: 7px 4px; font-size: 11px; }
-  .admin-layout { grid-template-columns: 1fr; }
+  .admin-layout { grid-template-columns: minmax(0, 1fr); max-width: 100vw; overflow-x: hidden; width: 100%; }
   .sidebar { display: flex; width: 100%; max-width: 100%; gap: 4px; overflow-x: auto; padding: 10px; border-right: 0; border-bottom: 1px solid var(--line); }
   .admin-brand { display: none; }
   .nav-button { width: auto; white-space: nowrap; }
-  .admin-content { max-width: 100%; padding: 27px 18px; }
+  .admin-content { max-width: 100%; min-width: 0; padding: 27px 18px; width: 100%; }
+  #download-backup, #download-storage-archive { flex: 1 1 170px; }
   .topbar { padding: 0 15px; }
   .topbar .brand-lockup span { display: none; }
   .header-brand-logo { width: 44px; height: 44px; }

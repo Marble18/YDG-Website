@@ -22,14 +22,14 @@ Open index.html in a modern browser.
 - Customer voucher access and printing once an order is Ready to Ship
 - Owner-customizable voucher title, colour and footer, with live preview
 - Additional owner accounts for trusted staff
-- Backup export, JSON restore and Daily / Weekly / Monthly backup preferences
+- Primary-owner-only secure business database backup, dry-run merge restore and separate private Storage archive
 - Under Maintenance mode that blocks customer login but keeps owner access available
 - Required delivery address and optional bus-station name for out-of-town orders
 - Prices in Myanmar Kyat (MMK)
 
 ## Important before launch
 
-Authentication, products, categories, inventory and product images now use Supabase. Orders, carts, customer management and several settings still require migration from browser Local Storage before the system is ready for real customers.
+Authentication, accounts, products, categories, inventory, carts, orders, private delivery proofs and shop/voucher settings use Supabase. Browser Local Storage is retained only as a non-authoritative UI cache; it is not used for backup or restore.
 
 For the production version, add:
 

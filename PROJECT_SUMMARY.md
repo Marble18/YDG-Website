@@ -75,9 +75,9 @@ Database တွင် `profiles`, `categories`, `products`, `orders`, `order_ite
 | Cart | Supabase `cart_items` through validated RPCs | Live since PR #10 |
 | Orders/order items | Supabase transactional checkout RPC | Live since PR #10 |
 | Customer/staff accounts | Supabase Auth + protected Edge Functions | Live; PR #11 expands active-staff customer operations |
-| Voucher/settings/maintenance | Browser Local Storage | Migration required |
-| Delivery proofs | Bucket exists | Private upload/access flow required |
-| Backup/restore | Browser Local Storage | Not a production database backup |
+| Voucher/settings/maintenance | Supabase `voucher_settings` + `app_settings` | Live in PR #16; browser copy is cache only |
+| Delivery proofs | Private Supabase Storage + `delivery_proofs` | Live since PR #14 |
+| Backup/restore | Protected `business-backup` Edge Function + transactional restore RPC | PR #17 stacked on PR #16; primary owner only, merge mode, separate private Storage ZIP |
 
 ## 5. Target account design
 
@@ -122,14 +122,17 @@ First-version decision:
 - Customers can read metadata and create a short-lived signed URL only for their own order. Other customers, anonymous users and disabled staff are denied by both table RLS and exact-object Storage policies. Signed URLs are generated on demand for 120 seconds and are never persisted or logged.
 - Failed metadata/status persistence triggers an exact-path cleanup of the new upload. Replacement swaps metadata first and then deletes only the previous exact object; a failed old-object cleanup preserves the new proof and surfaces a review warning.
 - Voucher screen and A4/A5 print output never contain the private image, signed URL or Storage path. They show only `Delivery proof recorded` when metadata exists.
-- Do not restore authentication, roles or passwords from browser backup JSON.
+- PR #16 makes `app_settings` and `voucher_settings` the device-independent source of truth for maintenance mode, backup-frequency preference and voucher title/colour/footer. Anonymous/authenticated clients can read only the non-sensitive display columns; direct writes and audit columns remain inaccessible.
+- Only an active owner can change settings through validated security-definer RPCs. Staff/customer/anonymous writes are denied server-side. Maintenance mode is also enforced by database triggers on customer cart mutations and order creation, so hiding UI is not the authorization boundary.
+- Local Storage retains only a last-known UI/settings cache. PR #17 retires browser snapshot export/restore entirely.
+- Secure business backups never contain Auth passwords/hashes, secret or service-role keys, tokens, signed URLs, RLS policies, Edge Functions or Supabase project configuration.
 - Publishable key is public only with correct RLS/Storage policies; secret/service-role keys are never public.
 
 ## 7. Known issues and risks
 
 - Supabase built-in email may return `EMAIL RATE LIMIT EXCEEDED`; production recovery needs custom SMTP.
 - Managed-account migration `202608050001` and Edge Functions `username-login` / `account-admin` were deployed to the linked Supabase project on 2026-08-05. Owner username login, customer creation/login, owner-managed password reset, old-password denial, disable denial and re-enable login were manually validated against the deploy preview.
-- Voucher settings and browser backup flows remain Local Storage features; cart and orders are retired as Local Storage sources of truth by PR #10.
+- Voucher and maintenance settings moved to Supabase in PR #16; cart and orders were retired as Local Storage sources of truth by PR #10. PR #17 also retires browser backup/restore.
 - PR #11 fixes blank voucher printing by cloning the persisted-data voucher into a dedicated print root outside `#app`; the previous print stylesheet hid `#app` and therefore hid the voucher modal itself. Font/image readiness and `beforeprint`/`afterprint` cleanup keep print and cancel flows stable.
 - Voucher printing supports explicit A4 (10 mm margins) and A5 (7 mm margins), repeating table headers, non-splitting rows/totals and long-name wrapping. Screen and print use the same requested/confirmed display helpers and public order number.
 - Customer catalogue photos use a card-specific 4:3 responsive wrapper and final `object-fit: contain; object-position: center` without changing owner thumbnails.
@@ -154,10 +157,10 @@ First-version decision:
 
 ## 9. Recommended next milestones
 
-1. Validate and merge PR #14 private delivery-proof Storage flow after Deploy Preview authorization tests.
-2. Confirm production remains on the merged PR #13 light-only build until PR #14 receives explicit approval.
-3. Move remaining voucher/settings and backup behavior away from browser-only state where appropriate.
-4. Add browser/mobile regression checks and a production-grade database plus Storage backup procedure.
+1. Validate PR #16 device-independent settings, owner-only writes and maintenance enforcement in Deploy Preview.
+2. Manually validate PR #17 database export, checksum rejection, dry-run counts, transactional merge restore and private Storage ZIP on its stacked Deploy Preview.
+3. Configure production SMTP for owner recovery reliability.
+4. Add automated browser/mobile authorization and regression checks.
 
 ## 10. Validation checklist
 
@@ -198,4 +201,8 @@ First-version decision:
 - 2026-08-09: PR #12 migrations `202608090001` and `202608090002` were applied to the linked Supabase project after a successful dry-run. Remote DB lint is clean, remote migration state is current, and anonymous list/delete RPC calls return `401`. Local desktop/mobile computed-style checks confirm the category row sticks at 70 px below navigation, scrolls horizontally on mobile and remains below menus/modals. Deploy Preview still needs active-owner, active-staff, disabled-staff, product-dependent deletion and catalogue regression testing before merge.
 - 2026-08-10: Verified PR #12 merged as `05c8362` with successful build/deploy/Workers checks. Started PR #13 on `codex/pr13-soft-pink-theme`: soft-pink light-only palette, complete Dark Mode UI/CSS/JavaScript retirement, safe stale-theme Local Storage cleanup, accessible interactive contrast/focus decisions and print-safe voucher overrides. Local visual/regression validation and Deploy Preview manual tests remain before merge.
 - 2026-08-10: Verified PR #13 merged as `3d23edb`. PR #14 migration `202608100001` was dry-run, linted clean and applied to the linked project. It adds private Storage enforcement, one-current-proof metadata/RLS, server-authorized upload/replace/remove RPCs, exact-path cleanup, short-lived authorized viewing, an accessible mobile lightbox and print-safe recorded-only voucher output. Anonymous metadata/RPC requests return `401`; active owner/staff/customer cross-account and failure-path tests remain for Deploy Preview before merge.
+- 2026-08-11: Verified PR #15 merged as `7d3e164`. Started PR #16 on `codex/pr16-supabase-settings`: existing `app_settings`/`voucher_settings` are hardened as live sources of truth, owner-only validated RPC writes and server-side maintenance guards were added, stale seed voucher values were safely upgraded, and browser restore was prevented from overwriting remote settings. Migration `202608110001` passed dry-run/lint and was applied; public-column reads return `200`, audit-column reads and anonymous RPC writes return `401`.
+- 2026-08-11: Started stacked PR #17 on `codex/pr17-secure-business-backup` (base `codex/pr16-supabase-settings`). Added primary-owner-only database export with format/schema metadata, row counts, exact Storage manifests and SHA-256 integrity; a separate private ZIP archive with per-object checksums; 15-minute dry-run restore plans; and an idempotent merge restore/audit transaction. Restore excludes the caller's primary-owner profile and never restores Auth credentials, policies, functions, project configuration or secrets. Database restore is merge-only (no deletions); Storage bytes are deliberately not mutated by that transaction, so the matching ZIP is retained for a separately reviewed exact-path recovery/compensation procedure. This is business-data portability, not full disaster recovery or PITR.
+- 2026-08-11: Completed the PR #17 Storage recovery follow-up on the combined PR #16 branch. The private ZIP now has its own server-side upload validation, dry-run plan and explicit-confirm restore. Validation checks ZIP structure/CRC, manifest integrity, per-object checksum and size, approved `product-images`/`delivery-proofs` buckets, safe exact paths, image MIME/extension/file signatures, duplicates and unlisted files. Restore is merge-only with `upsert: false`: matching objects are skipped, different existing objects are conflicts, and nothing is overwritten or broadly deleted. Full success consumes/audits the plan; partial failure reports exact successes/failures and keeps the plan retryable so already-created objects safely become skips. Storage operations cannot share the PostgreSQL transaction, so file-level reporting and idempotent retry are the compensation strategy. Remaining manual tests cover owner downloads/dry-runs, tamper/path/MIME rejection, conflict/partial retry, role denial, mobile UI and private delivery-proof access after restore.
+- 2026-08-11: Live Preview debugging found `DATABASE_TABLE_READ_FAILED` on `categories`: the protected Edge Function authenticated the owner correctly, but the backup tables lacked explicit PostgreSQL `service_role` privileges. Migration `202608110004` grants only backup-table reads plus restore-plan/audit writes; browser roles remain denied. Edge errors now return/log safe codes without secrets. Database backup table reads run concurrently, include the linked project reference, and no longer hide non-2xx JSON details. Storage backup now performs a manifest-only inspection first, returns a clear empty state, and divides large backups into deterministic <=16 MB ZIP parts rather than waiting to fail at the former 40 MB aggregate limit. The manifest is saved in a short-lived server plan so each part avoids rescanning all objects; already-compressed images use ZIP `STORE` to stay below Edge CPU limits. Live evidence: database JSON download succeeded; 622 approved files (134.2 MB) downloaded as nine parts; malformed JSON/ZIP files were denied without opening a confirmation modal. Each valid part keeps the same secure validate/dry-run/merge-only restore contract and must be retained/restored separately.
 - 2026-08-11: Started PR #15 on `codex/pr15-brand-logo`. The supplied 2048 px transparent PNG was verified as RGBA and converted non-destructively into a 768 px lossless WebP logo plus 192 px PNG favicon for Login, Customer, Owner/Staff, Voucher and Print use. Responsive/print validation remains before merge.

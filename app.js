@@ -5,7 +5,6 @@
   var LEGACY_DEMO_BACKUP = 'yt-stationery-auto-backup-v2';
   var LEGACY_DEMO_CART = 'yt-cart-v2';
   var STORAGE = 'yt-stationery-state-v3';
-  var AUTO_BACKUP = 'yt-stationery-auto-backup-v3';
   var CART_STORAGE = 'yt-cart-v3';
   var SUPABASE_URL = 'https://tfvwfpvdqcbgqnijhhpd.supabase.co';
   var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_1TYSPsIChtMyo_NjcSHQZg_A7uS0PsX';
@@ -15,6 +14,8 @@
   var categoryService = window.createCategoryService(supabaseClient);
   var orderService = window.createOrderService(supabaseClient);
   var deliveryProofService = window.createDeliveryProofService(supabaseClient);
+  var settingsService = window.createSettingsService(supabaseClient);
+  var businessBackupService = window.createBusinessBackupService(supabaseClient);
   var passwordRecoveryMode = window.location.hash.indexOf('type=recovery') !== -1;
   var state = loadState();
   var currentUser = null;
@@ -30,6 +31,9 @@
   var remoteCart = [];
   var checkoutKey = null;
   var activeVoucherPrint = null;
+  var settingsLoadError = '';
+  var pendingBusinessRestore = null;
+  var pendingStorageRestore = null;
   localStorage.removeItem('yt-theme-v2');
   document.body.classList.remove('dark-mode');
 
@@ -90,16 +94,27 @@
     return fresh;
   }
 
-  function autoBackupIfDue() {
-    var intervals = { Daily: 1, Weekly: 7, Monthly: 30 };
-    var last = Date.parse(state.settings.lastBackup || '');
-    if (last && Date.now() - last < intervals[state.settings.backupFrequency] * 86400000) return;
-    state.settings.lastBackup = new Date().toISOString();
-    localStorage.setItem(AUTO_BACKUP, JSON.stringify({ createdAt: state.settings.lastBackup, data: state }));
+  async function loadRemoteSettings() {
+    try {
+      var remote = await settingsService.load();
+      var localSnapshotDate = state.settings.lastBackup || '';
+      state.settings = {
+        maintenanceMode: remote.maintenanceMode,
+        backupFrequency: remote.backupFrequency,
+        lastBackup: localSnapshotDate,
+        voucher: remote.voucher,
+        updatedAt: remote.updatedAt
+      };
+      localStorage.setItem(STORAGE, JSON.stringify(state));
+      settingsLoadError = '';
+      return true;
+    } catch (error) {
+      settingsLoadError = error.message || 'Shop settings could not be loaded.';
+      return false;
+    }
   }
 
   function saveState() {
-    autoBackupIfDue();
     localStorage.setItem(STORAGE, JSON.stringify(state));
   }
 
@@ -1074,12 +1089,19 @@
 
   function settingsPage() {
     var s = state.settings;
-    var choices = ['Daily', 'Weekly', 'Monthly'].map(function (choice) { return '<option value="' + choice + '" ' + (s.backupFrequency === choice ? 'selected' : '') + '>' + choice + '</option>'; }).join('');
     var preview = voucherPreview(s.voucher);
-    return '<div class="page-heading"><div><p class="eyebrow">Shop controls</p><h1>Settings</h1><p>Configure maintenance, backups, and your customer voucher style.</p></div></div><section class="admin-grid"><form class="panel" id="site-settings"><h2 class="panel-title">Site maintenance</h2><p class="subtext">Customers cannot log in while Under Maintenance is enabled. Owner accounts can always access settings.</p><label class="field"><span><input name="maintenance" type="checkbox" ' + (s.maintenanceMode ? 'checked' : '') + '> Enable Under Maintenance</span></label><label class="field">Automatic backup frequency<select name="backupFrequency">' + choices + '</select></label><div class="two-button"><button class="primary" type="submit">Save site settings</button></div></form><div class="panel"><h2 class="panel-title">Backup & restore</h2><p class="subtext"><b>Last local snapshot:</b><br>' + esc(s.lastBackup ? new Date(s.lastBackup).toLocaleString() : 'Not created yet') + '</p><p class="photo-help">This demo records its automatic backup whenever an owner uses the site after the chosen frequency is due. The live server version runs backups automatically even when nobody is logged in.</p><button class="primary" type="button" id="download-backup">Download backup</button><label class="field" style="margin-top:18px">Restore a backup file<input id="restore-backup" type="file" accept="application/json"></label></div></section><section class="panel voucher-settings"><form id="voucher-settings"><div class="page-heading"><div><p class="eyebrow">Voucher design</p><h1>Customize & preview</h1><p>Customers can view and print this voucher at Ready to Ship.</p></div><button class="primary" type="submit">Save voucher style</button></div><div class="form-grid"><label class="field full-field">Voucher title<input name="title" id="voucher-title" value="' + esc(s.voucher.title) + '"></label><label class="field">Accent colour<input name="color" id="voucher-color" type="color" value="' + esc(s.voucher.accentColor) + '"></label><label class="field full-field">Footer message<input name="footer" id="voucher-footer" value="' + esc(s.voucher.footer) + '"></label></div></form><div id="voucher-preview">' + preview + '</div></section>';
+    return '<div class="page-heading"><div><p class="eyebrow">Shop controls</p><h1>Settings</h1><p>Configure maintenance, secure backups, and your customer voucher style.</p></div></div><section class="admin-grid"><form class="panel" id="site-settings"><h2 class="panel-title">Site maintenance</h2><p class="subtext">Customers cannot log in while Under Maintenance is enabled. Owner accounts can always access settings.</p><label class="field"><span><input name="maintenance" type="checkbox" ' + (s.maintenanceMode ? 'checked' : '') + '> Enable Under Maintenance</span></label><div class="two-button"><button class="primary" type="submit">Save site settings</button></div></form><div class="panel"><h2 class="panel-title">Secure business backup & restore</h2><p class="subtext">Step 1 backs up/restores database records. Step 2 separately backs up/restores exact private Storage files. Backups exclude passwords, tokens, signed URLs and project secrets.</p><div class="inline-error" role="note"><b>Important:</b> This is a business-data export, not a full Supabase disaster-recovery backup. Keep both files private.</div><div class="action-row"><button class="primary" type="button" id="download-backup">Create database backup</button><button class="secondary" type="button" id="download-storage-archive">Create private Storage archive</button></div><label class="field" style="margin-top:18px">Step 1 — Validate a database backup for restore<input id="restore-backup" type="file" accept="application/json,.json"></label><p class="photo-help">Database selection only validates and shows table create/update counts. Restore is transactional merge-only and protects the primary owner.</p><div id="business-backup-status" class="photo-help" aria-live="polite"></div><label class="field" style="margin-top:18px">Step 2 — Validate a private Storage archive for restore<input id="restore-storage-archive" type="file" accept="application/zip,.zip"></label><p class="photo-help">Storage selection validates every exact path, MIME type, size and checksum. Existing matching files are skipped; conflicts are reported and never overwritten.</p><div id="storage-restore-status" class="photo-help" aria-live="polite"></div></div></section><section class="panel voucher-settings"><form id="voucher-settings"><div class="page-heading"><div><p class="eyebrow">Voucher design</p><h1>Customize & preview</h1><p>Customers can view and print this voucher at Ready to Ship.</p></div><button class="primary" type="submit">Save voucher style</button></div><div class="form-grid"><label class="field full-field">Voucher title<input name="title" id="voucher-title" value="' + esc(s.voucher.title) + '"></label><label class="field">Accent colour<input name="color" id="voucher-color" type="color" value="' + esc(s.voucher.accentColor) + '"></label><label class="field full-field">Footer message<input name="footer" id="voucher-footer" value="' + esc(s.voucher.footer) + '"></label></div></form><div id="voucher-preview">' + preview + '</div></section>';
   }
 
   function bindAdmin() {
+    if (settingsLoadError && adminPage === 'settings') {
+      var settingsContent = document.getElementById('admin-content');
+      settingsContent.insertAdjacentHTML('afterbegin', '<div class="inline-error" role="alert">Live settings could not be loaded. Cached values are shown and cannot overwrite the server. <button class="text-link" id="retry-shop-settings" type="button">Retry</button></div>');
+      document.getElementById('retry-shop-settings').addEventListener('click', async function () {
+        if (await loadRemoteSettings()) { renderAdminPage(); toast('Live settings reloaded.'); }
+        else toast(settingsLoadError);
+      });
+    }
     document.querySelectorAll('[data-go]').forEach(function (button) { button.addEventListener('click', function () { adminPage = button.dataset.go; renderAdminPage(); }); });
     bindOrderTableActions(document);
     document.querySelectorAll('[data-toggle-account]').forEach(function (button) { button.addEventListener('click', function () { updateAccountAccess(button.dataset.toggleAccount); }); });
@@ -1092,8 +1114,10 @@
     var newOwner = document.getElementById('new-owner'); if (newOwner) newOwner.addEventListener('click', function () { renderAccountForm('staff'); });
     var siteSettings = document.getElementById('site-settings'); if (siteSettings) siteSettings.addEventListener('submit', saveSiteSettings);
     var voucherSettings = document.getElementById('voucher-settings'); if (voucherSettings) voucherSettings.addEventListener('submit', saveVoucherSettings);
-    var download = document.getElementById('download-backup'); if (download) download.addEventListener('click', downloadBackup);
-    var restore = document.getElementById('restore-backup'); if (restore) restore.addEventListener('change', restoreBackup);
+    var download = document.getElementById('download-backup'); if (download) download.addEventListener('click', createDatabaseBackup);
+    var storageArchive = document.getElementById('download-storage-archive'); if (storageArchive) storageArchive.addEventListener('click', createStorageArchive);
+    var restore = document.getElementById('restore-backup'); if (restore) restore.addEventListener('change', prepareBusinessRestore);
+    var restoreStorage = document.getElementById('restore-storage-archive'); if (restoreStorage) restoreStorage.addEventListener('change', prepareStorageRestore);
     if (document.getElementById('managed-category-results')) loadManagedCategories();
     var ownerProductSearch = document.getElementById('owner-product-search');
     var ownerProductCategory = document.getElementById('owner-product-category');
@@ -1801,12 +1825,22 @@
     });
   }
 
-  function saveSiteSettings(event) {
+  async function saveSiteSettings(event) {
     event.preventDefault();
     var data = new FormData(event.target);
-    state.settings.maintenanceMode = data.get('maintenance') === 'on';
-    state.settings.backupFrequency = data.get('backupFrequency');
-    saveState(); renderAdminPage(); toast('Site settings saved.');
+    var button = event.target.querySelector('button[type="submit"]');
+    button.disabled = true; button.textContent = 'Saving...';
+    try {
+      await settingsService.saveSite({
+        maintenanceMode: data.get('maintenance') === 'on',
+        backupFrequency: state.settings.backupFrequency
+      });
+      if (!await loadRemoteSettings()) throw new Error(settingsLoadError);
+      renderAdminPage(); toast('Site settings saved for every device.');
+    } catch (error) {
+      button.disabled = false; button.textContent = 'Save site settings';
+      toast(error.message || 'Site settings could not be saved.');
+    }
   }
 
   function voucherPreview(voucher) {
@@ -1818,43 +1852,215 @@
     preview.innerHTML = voucherPreview({ title: document.getElementById('voucher-title').value, accentColor: document.getElementById('voucher-color').value, footer: document.getElementById('voucher-footer').value });
   }
 
-  function saveVoucherSettings(event) {
+  async function saveVoucherSettings(event) {
     event.preventDefault();
     var data = new FormData(event.target);
-    state.settings.voucher = { title: data.get('title'), accentColor: data.get('color'), footer: data.get('footer') };
-    saveState(); toast('Voucher style saved.');
+    var button = event.target.querySelector('button[type="submit"]');
+    var voucher = { title: data.get('title').trim(), accentColor: data.get('color'), footer: data.get('footer').trim() };
+    button.disabled = true; button.textContent = 'Saving...';
+    try {
+      await settingsService.saveVoucher(voucher);
+      if (!await loadRemoteSettings()) throw new Error(settingsLoadError);
+      renderAdminPage(); toast('Voucher style saved for every device.');
+    } catch (error) {
+      button.disabled = false; button.textContent = 'Save voucher style';
+      toast(error.message || 'Voucher style could not be saved.');
+    }
   }
 
-  function downloadBackup() {
-    var payload = JSON.stringify({ app: 'Yadanar Theingi Ordering System', exportedAt: new Date().toISOString(), data: state }, null, 2);
-    var blob = new Blob([payload], { type: 'application/json' });
+  function downloadBlob(blob, filename) {
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
-    link.href = url; link.download = 'yadanar-theingi-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+    link.href = url; link.download = filename;
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    toast('Backup download started.');
   }
 
-  function restoreBackup(event) {
+  function setBusinessBackupStatus(message, isError) {
+    var status = document.getElementById('business-backup-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = isError ? 'inline-error' : 'photo-help';
+  }
+
+  function setStorageRestoreStatus(message, isError) {
+    var status = document.getElementById('storage-restore-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = isError ? 'inline-error' : 'photo-help';
+  }
+
+  function readableBytes(value) {
+    var bytes = Number(value || 0);
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  async function createDatabaseBackup(event) {
+    var button = event.currentTarget;
+    button.disabled = true; button.textContent = 'Creating secure backup...';
+    setBusinessBackupStatus('Reading live business records and calculating checksum...');
+    try {
+      var backup = await businessBackupService.createDatabaseBackup();
+      var filename = 'ydg-business-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      downloadBlob(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }), filename);
+      setBusinessBackupStatus('Database backup downloaded. Store it privately with its matching Storage archive.');
+      toast('Secure database backup downloaded.');
+    } catch (error) {
+      setBusinessBackupStatus(error.message || 'Database backup failed. Retry safely.', true);
+      toast(error.message || 'Database backup failed.');
+    } finally {
+      button.disabled = false; button.textContent = 'Create database backup';
+    }
+  }
+
+  async function createStorageArchive(event) {
+    var button = event.currentTarget;
+    button.disabled = true; button.textContent = 'Inspecting Storage...';
+    setBusinessBackupStatus('Reading the approved bucket manifest before downloading files...');
+    try {
+      var plan = await businessBackupService.inspectStorageBackup();
+      if (!plan.totalFiles) {
+        setBusinessBackupStatus('No files to back up in product-images or delivery-proofs. Database backup is still available.');
+        toast('No private Storage files to back up.');
+        return;
+      }
+      setBusinessBackupStatus('Found ' + plan.totalFiles + ' files (' + readableBytes(plan.totalBytes) + '). Downloading ' + plan.partCount + ' safe archive part' + (plan.partCount === 1 ? '' : 's') + '...');
+      for (var partIndex = 0; partIndex < plan.partCount; partIndex++) {
+        button.textContent = 'Downloading part ' + (partIndex + 1) + ' of ' + plan.partCount + '...';
+        var archive = await businessBackupService.createStorageArchive(plan.planId, partIndex);
+        if (!(archive instanceof Blob) || !archive.size) {
+          throw new Error('Storage archive binary response was not received safely. No archive was downloaded; retry after refreshing the page.');
+        }
+        var blob = archive.slice(0, archive.size, 'application/zip');
+        downloadBlob(blob, 'ydg-private-storage-' + new Date().toISOString().slice(0, 10) + '-part-' + (partIndex + 1) + '-of-' + plan.partCount + '.zip');
+      }
+      setBusinessBackupStatus('Downloaded ' + plan.partCount + ' private Storage archive part' + (plan.partCount === 1 ? '' : 's') + ' for ' + plan.totalFiles + ' files. Keep every part private and validate/restore each separately.');
+      toast('Private Storage archive download completed.');
+    } catch (error) {
+      setBusinessBackupStatus(error.message || 'Storage archive failed. No data was changed.', true);
+      toast(error.message || 'Storage archive failed.');
+    } finally {
+      button.disabled = false; button.textContent = 'Create private Storage archive';
+    }
+  }
+
+  async function prepareBusinessRestore(event) {
     var file = event.target.files[0];
     if (!file) return;
-    var reader = new FileReader();
-    reader.onload = function () {
-      try {
-        var parsed = JSON.parse(String(reader.result));
-        var restored = parsed.data || parsed;
-        if (!restored.products || !restored.users || !restored.orders) throw new Error('invalid');
-        localStorage.setItem(AUTO_BACKUP, JSON.stringify({ createdAt: new Date().toISOString(), data: state }));
-        state = normalize(restored);
-        localStorage.setItem(STORAGE, JSON.stringify(state));
-        if (currentUser) renderAdmin(); else renderLogin();
-        toast('Backup restored successfully.');
-      } catch (error) {
-        toast('That backup file is not valid.');
+    event.target.disabled = true;
+    setBusinessBackupStatus('Validating file type, size, version, schema and checksum...');
+    try {
+      var backup = await businessBackupService.readBackupFile(file);
+      var preview = await businessBackupService.previewRestore(backup);
+      pendingBusinessRestore = { backup: backup, planId: preview.planId };
+      renderBusinessRestorePreview(preview);
+      setBusinessBackupStatus('Dry-run complete. Review the preview; no live data has changed.');
+    } catch (error) {
+      pendingBusinessRestore = null;
+      setBusinessBackupStatus(error.message || 'Backup validation failed. No data was changed.', true);
+      toast(error.message || 'Backup validation failed.');
+    } finally {
+      event.target.disabled = false; event.target.value = '';
+    }
+  }
+
+  function renderBusinessRestorePreview(preview) {
+    var rows = Object.keys(preview.tables || {}).map(function (table) {
+      var counts = preview.tables[table] || {};
+      return '<tr><td><b>' + esc(table) + '</b></td><td>' + Number(counts.incoming || 0) + '</td><td>' + Number(counts.insert || 0) + '</td><td>' + Number(counts.update || 0) + '</td></tr>';
+    }).join('');
+    modal('<div class="modal-card"><button class="modal-close" id="close-modal" aria-label="Close">&times;</button><p class="eyebrow">Database dry-run validated</p><h2>Confirm database restore</h2><div class="inline-error" role="alert"><b>Merge-only:</b> Matching IDs are updated and new IDs are inserted. Existing unrelated records are not deleted. Primary owner Auth/profile/role, RLS, migrations, Edge Functions and project configuration are never restored.</div><div class="table-wrap"><table><thead><tr><th>Table</th><th>Incoming</th><th>Create</th><th>Update</th></tr></thead><tbody>' + rows + '</tbody></table></div><p class="photo-help">Database changes run in one transaction and roll back together on failure. Private Storage bytes are a separate Step 2 restore.</p><label class="field"><span><input id="business-restore-confirmation" type="checkbox"> I reviewed the counts and understand this changes live database records.</span></label><div id="business-restore-progress" class="photo-help" aria-live="polite"></div><div class="two-button"><button class="secondary" type="button" id="cancel-business-restore">Cancel</button><button class="danger" type="button" id="confirm-business-restore" disabled>Confirm database restore</button></div></div>');
+    var checkbox = document.getElementById('business-restore-confirmation');
+    var confirmButton = document.getElementById('confirm-business-restore');
+    checkbox.addEventListener('change', function () { confirmButton.disabled = !checkbox.checked; });
+    document.getElementById('cancel-business-restore').addEventListener('click', closeModal);
+    confirmButton.addEventListener('click', confirmBusinessRestore);
+  }
+
+  async function confirmBusinessRestore(event) {
+    if (!pendingBusinessRestore) return;
+    var button = event.currentTarget;
+    var progress = document.getElementById('business-restore-progress');
+    button.disabled = true; button.textContent = 'Restoring transaction...';
+    progress.textContent = 'Applying dependency-safe database changes. Do not close this window.';
+    try {
+      var result = await businessBackupService.confirmRestore(pendingBusinessRestore.backup, pendingBusinessRestore.planId);
+      pendingBusinessRestore = null;
+      progress.textContent = 'Restore committed successfully.';
+      await Promise.all([loadRemoteSettings(), loadCatalogueData(), loadManagedAccounts()]);
+      toast(result.alreadyRestored ? 'This backup was already restored; no duplicate changes were made.' : 'Business data restored successfully.');
+      setTimeout(function () { closeModal(); renderAdminPage(); }, 500);
+    } catch (error) {
+      progress.textContent = error.message || 'Restore failed and database changes were rolled back.';
+      button.disabled = false; button.textContent = 'Retry restore';
+    }
+  }
+
+  async function prepareStorageRestore(event) {
+    var file = event.target.files[0];
+    if (!file) return;
+    event.target.disabled = true;
+    setStorageRestoreStatus('Uploading securely for server-side ZIP, manifest, path, MIME, size and checksum validation...');
+    try {
+      var preview = await businessBackupService.previewStorageRestore(file);
+      pendingStorageRestore = { file: file, planId: preview.planId };
+      renderStorageRestorePreview(preview);
+      setStorageRestoreStatus('Storage dry-run complete. No Storage files have changed.');
+    } catch (error) {
+      pendingStorageRestore = null;
+      setStorageRestoreStatus(error.message || 'Storage archive validation failed. No files were changed.', true);
+      toast(error.message || 'Storage archive validation failed.');
+    } finally {
+      event.target.disabled = false; event.target.value = '';
+    }
+  }
+
+  function renderStorageRestorePreview(preview) {
+    var counts = preview.counts || {};
+    modal('<div class="modal-card"><button class="modal-close" id="close-modal" aria-label="Close">&times;</button><p class="eyebrow">Private Storage dry-run validated</p><h2>Confirm exact-path Storage restore</h2><div class="inline-error" role="alert"><b>Merge-only, no overwrite:</b> New files are created. Identical existing files are skipped. Conflicting existing paths are reported and never overwritten or deleted.</div><div class="table-wrap"><table><thead><tr><th>Total</th><th>Create</th><th>Skip</th><th>Conflict</th><th>Invalid</th><th>Size</th></tr></thead><tbody><tr><td>' + Number(counts.total || 0) + '</td><td>' + Number(counts.create || 0) + '</td><td>' + Number(counts.skip || 0) + '</td><td>' + Number(counts.conflict || 0) + '</td><td>' + Number(counts.invalid || 0) + '</td><td>' + readableBytes(preview.totalBytes) + '</td></tr></tbody></table></div><p class="photo-help">Allowed buckets: product-images and delivery-proofs. Confirmation rechecks your active primary-owner access and validates this same archive again.</p><label class="field"><span><input id="storage-restore-confirmation" type="checkbox"> I reviewed the dry-run and want to create only missing exact-path files.</span></label><div id="storage-restore-progress" class="photo-help" aria-live="polite"></div><div class="two-button"><button class="secondary" type="button" id="cancel-storage-restore">Cancel</button><button class="danger" type="button" id="confirm-storage-restore" disabled>Confirm Storage restore</button></div></div>');
+    var checkbox = document.getElementById('storage-restore-confirmation');
+    var confirmButton = document.getElementById('confirm-storage-restore');
+    checkbox.addEventListener('change', function () { confirmButton.disabled = !checkbox.checked; });
+    document.getElementById('cancel-storage-restore').addEventListener('click', closeModal);
+    confirmButton.addEventListener('click', confirmStorageRestore);
+  }
+
+  function storageRestoreReport(result) {
+    var created = (result.created || []).length;
+    var skipped = (result.skipped || []).length;
+    var conflicts = (result.conflicts || []).length;
+    var failed = result.failed || [];
+    var message = 'Created ' + created + ', skipped ' + skipped + ', conflicts ' + conflicts + ', failed ' + failed.length + '.';
+    if (failed.length) message += ' Failed: ' + failed.slice(0, 5).map(function (item) { return item.bucket + '/' + item.path; }).join(', ') + (failed.length > 5 ? '…' : '');
+    return message;
+  }
+
+  async function confirmStorageRestore(event) {
+    if (!pendingStorageRestore) return;
+    var button = event.currentTarget;
+    var progress = document.getElementById('storage-restore-progress');
+    button.disabled = true; button.textContent = 'Restoring exact paths...';
+    progress.textContent = 'Revalidating the archive and creating only missing files. Existing files will not be overwritten.';
+    try {
+      var result = await businessBackupService.confirmStorageRestore(pendingStorageRestore.file, pendingStorageRestore.planId);
+      var report = storageRestoreReport(result);
+      progress.textContent = report;
+      if (result.partialFailure) {
+        button.disabled = false; button.textContent = 'Safe retry failed files';
+        setStorageRestoreStatus('Partial Storage restore: ' + report, true);
+        toast('Storage restore partially completed. Review the report and retry safely.');
+      } else {
+        pendingStorageRestore = null;
+        setStorageRestoreStatus((result.alreadyRestored ? 'Archive was already restored. ' : 'Storage restore completed. ') + report);
+        toast(result.alreadyRestored ? 'Storage archive was already restored; nothing was duplicated.' : 'Private Storage restore completed.');
+        setTimeout(closeModal, 800);
       }
-    };
-    reader.readAsText(file);
+    } catch (error) {
+      progress.textContent = error.message || 'Storage restore failed. Existing files were not overwritten.';
+      button.disabled = false; button.textContent = 'Retry Storage restore';
+    }
   }
 
   function applyVoucherPrintSize(size, target) {
@@ -1957,24 +2163,33 @@
   async function startApp() {
     document.getElementById('app').innerHTML = '<section class="login-page"><div class="login-card"><h2>Loading…</h2><p class="subtext">Checking your secure session.</p></div></section>';
     try {
+      var settingsLoaded = await loadRemoteSettings();
       var sessionResult = await supabaseClient.auth.getSession();
       var session = sessionResult.data.session;
       if (passwordRecoveryMode && session) return renderPasswordRecovery();
-      if (!session) return renderLogin();
+      if (!session) {
+        renderLogin();
+        if (!settingsLoaded) toast('Live shop settings could not be loaded. Showing the last cached settings.');
+        return;
+      }
 
       currentUser = await loadAuthenticatedUser(session.user);
       if (currentUser.role === 'owner' || currentUser.role === 'staff') {
         await loadCatalogueData();
         await loadRemoteOrders();
         await loadManagedAccounts();
-        return renderAdmin();
+        renderAdmin();
+        if (!settingsLoaded) toast('Live shop settings could not be loaded. Cached values are shown.');
+        return;
       }
       if (currentUser.role === 'customer') {
         if (state.settings.maintenanceMode) throw new Error('Customer ordering is temporarily under maintenance.');
         await loadCatalogueData();
         await loadRemoteOrders();
         await migrateLegacyCartOnce();
-        return renderCustomer();
+        renderCustomer();
+        if (!settingsLoaded) toast('Live shop settings could not be loaded. Cached values are shown.');
+        return;
       }
       throw new Error('This account does not have access to the application.');
     } catch (error) {

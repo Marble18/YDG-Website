@@ -3,3 +3,6 @@ verify_jwt = false
 
 [functions.account-admin]
 verify_jwt = true
+
+[functions.business-backup]
+verify_jwt = true
