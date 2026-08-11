@@ -1917,14 +1917,24 @@
 
   async function createStorageArchive(event) {
     var button = event.currentTarget;
-    button.disabled = true; button.textContent = 'Building private archive...';
-    setBusinessBackupStatus('Downloading exact private Storage object paths. This can take a moment.');
+    button.disabled = true; button.textContent = 'Inspecting Storage...';
+    setBusinessBackupStatus('Reading the approved bucket manifest before downloading files...');
     try {
-      var archive = await businessBackupService.createStorageArchive();
-      var blob = archive instanceof Blob ? archive : new Blob([archive], { type: 'application/zip' });
-      downloadBlob(blob, 'ydg-private-storage-' + new Date().toISOString().slice(0, 10) + '.zip');
-      setBusinessBackupStatus('Private Storage archive downloaded. It is separate from database restore and must be protected.');
-      toast('Private Storage archive downloaded.');
+      var plan = await businessBackupService.inspectStorageBackup();
+      if (!plan.totalFiles) {
+        setBusinessBackupStatus('No files to back up in product-images or delivery-proofs. Database backup is still available.');
+        toast('No private Storage files to back up.');
+        return;
+      }
+      setBusinessBackupStatus('Found ' + plan.totalFiles + ' files (' + readableBytes(plan.totalBytes) + '). Downloading ' + plan.partCount + ' safe archive part' + (plan.partCount === 1 ? '' : 's') + '...');
+      for (var partIndex = 0; partIndex < plan.partCount; partIndex++) {
+        button.textContent = 'Downloading part ' + (partIndex + 1) + ' of ' + plan.partCount + '...';
+        var archive = await businessBackupService.createStorageArchive(partIndex);
+        var blob = archive instanceof Blob ? archive : new Blob([archive], { type: 'application/zip' });
+        downloadBlob(blob, 'ydg-private-storage-' + new Date().toISOString().slice(0, 10) + '-part-' + (partIndex + 1) + '-of-' + plan.partCount + '.zip');
+      }
+      setBusinessBackupStatus('Downloaded ' + plan.partCount + ' private Storage archive part' + (plan.partCount === 1 ? '' : 's') + ' for ' + plan.totalFiles + ' files. Keep every part private and validate/restore each separately.');
+      toast('Private Storage archive download completed.');
     } catch (error) {
       setBusinessBackupStatus(error.message || 'Storage archive failed. No data was changed.', true);
       toast(error.message || 'Storage archive failed.');

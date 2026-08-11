@@ -6,10 +6,22 @@ const FORMAT_VERSION = 'ydg-business-backup-v1'
 const SCHEMA_VERSION = '202608110002'
 const MAX_RESTORE_BYTES = 12 * 1024 * 1024
 const MAX_ARCHIVE_BYTES = 40 * 1024 * 1024
+const ARCHIVE_PART_BYTES = 24 * 1024 * 1024
 const MAX_ARCHIVE_REQUEST_BYTES = MAX_ARCHIVE_BYTES + 1024 * 1024
 const TABLES = ['categories', 'products', 'profiles', 'orders', 'order_items', 'cart_items',
   'inventory_movements', 'voucher_settings', 'app_settings', 'delivery_proofs']
 const BUCKETS = ['product-images', 'delivery-proofs']
+
+class BackupError extends Error {
+  code: string
+  status: number
+  constructor(code: string, message: string, status = 400) {
+    super(message)
+    this.name = 'BackupError'
+    this.code = code
+    this.status = status
+  }
+}
 
 async function requirePrimaryOwner(request: Request) {
   const token = (request.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
@@ -27,7 +39,7 @@ async function allRows(admin: ReturnType<typeof adminClient>, table: string) {
   const rows: Record<string, unknown>[] = []
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await admin.from(table).select('*').range(offset, offset + 999)
-    if (error) throw error
+    if (error) throw new BackupError('DATABASE_TABLE_READ_FAILED', `Database backup could not read the ${table} table.`)
     rows.push(...(data ?? []))
     if (!data || data.length < 1000) return rows
   }
@@ -41,7 +53,7 @@ async function bucketManifest(admin: ReturnType<typeof adminClient>, bucket: str
     if (depth > 8) throw new Error('Storage folder depth is not supported')
     for (let offset = 0; ; offset += 1000) {
       const { data, error } = await admin.storage.from(bucket).list(prefix, { limit: 1000, offset, sortBy: { column: 'name', order: 'asc' } })
-      if (error) throw error
+      if (error) throw new BackupError('STORAGE_LIST_FAILED', `Storage backup could not list the ${bucket} bucket.`)
       for (const item of data ?? []) {
         const path = prefix ? `${prefix}/${item.name}` : item.name
         if (item.id) {
@@ -69,13 +81,14 @@ async function bytesChecksum(value: ArrayBuffer) {
 
 async function buildBackup(admin: ReturnType<typeof adminClient>, ownerId: string) {
   const data: Record<string, unknown[]> = {}
-  for (const table of TABLES) data[table] = await allRows(admin, table)
-  const storage = { manifests: [] as ManifestEntry[] }
-  for (const bucket of BUCKETS) storage.manifests.push(...await bucketManifest(admin, bucket))
+  const tableRows = await Promise.all(TABLES.map((table) => allRows(admin, table)))
+  TABLES.forEach((table, index) => { data[table] = tableRows[index] })
+  const storage = { manifests: (await Promise.all(BUCKETS.map((bucket) => bucketManifest(admin, bucket)))).flat() }
   storage.manifests.sort((a, b) => `${a.bucket}/${a.path}`.localeCompare(`${b.bucket}/${b.path}`))
   const core = {
     metadata: {
       application: 'Yadanar Theingi Ecommerce', formatVersion: FORMAT_VERSION,
+      projectRef: new URL(Deno.env.get('SUPABASE_URL')!).hostname.split('.')[0],
       schemaVersion: SCHEMA_VERSION, createdAt: new Date().toISOString(), createdBy: ownerId,
       tableCounts: Object.fromEntries(TABLES.map((table) => [table, data[table].length])),
       storageCounts: Object.fromEntries(BUCKETS.map((bucket) => [bucket, storage.manifests.filter((entry) => entry.bucket === bucket).length])),
@@ -96,6 +109,30 @@ async function validateBackup(value: unknown) {
   const core = { metadata: backup.metadata, data: backup.data, storage: backup.storage }
   if (await checksum(core) !== backup.integrity.checksum) throw new Error('Backup checksum verification failed')
   return { backup, core, checksum: backup.integrity.checksum as string }
+}
+
+async function storageArchivePlan(admin: ReturnType<typeof adminClient>) {
+  const manifest = (await Promise.all(BUCKETS.map((bucket) => bucketManifest(admin, bucket)))).flat()
+  manifest.sort((a, b) => `${a.bucket}/${a.path}`.localeCompare(`${b.bucket}/${b.path}`))
+  const parts: ManifestEntry[][] = []
+  let current: ManifestEntry[] = []
+  let currentBytes = 0
+  let totalBytes = 0
+  for (const entry of manifest) {
+    const size = Number(entry.size || 0)
+    const maxSize = entry.bucket === 'product-images' ? 500 * 1024 : 5 * 1024 * 1024
+    if (!Number.isSafeInteger(size) || size < 0 || size > maxSize) throw new BackupError('STORAGE_OBJECT_SIZE_INVALID', 'A stored object has invalid size metadata and cannot be archived.')
+    if (current.length && currentBytes + size > ARCHIVE_PART_BYTES) {
+      parts.push(current); current = []; currentBytes = 0
+    }
+    current.push(entry); currentBytes += size; totalBytes += size
+  }
+  if (current.length) parts.push(current)
+  return {
+    manifest, parts, totalBytes,
+    totalFiles: manifest.length,
+    bucketCounts: Object.fromEntries(BUCKETS.map((bucket) => [bucket, manifest.filter((entry) => entry.bucket === bucket).length])),
+  }
 }
 
 type ValidatedArchive = {
@@ -179,7 +216,7 @@ async function validateStorageArchive(file: File): Promise<ValidatedArchive> {
     throw new Error('Storage archive version or manifest is incompatible')
   }
   if (manifest.integrity?.algorithm !== 'SHA-256' || !/^[0-9a-f]{64}$/.test(manifest.integrity?.checksum ?? '')) throw new Error('Storage archive manifest checksum is missing')
-  const manifestCore = { application: manifest.application, formatVersion: manifest.formatVersion, schemaVersion: manifest.schemaVersion, createdAt: manifest.createdAt, createdBy: manifest.createdBy, objects: manifest.objects }
+  const manifestCore = { application: manifest.application, formatVersion: manifest.formatVersion, schemaVersion: manifest.schemaVersion, createdAt: manifest.createdAt, createdBy: manifest.createdBy, partNumber: manifest.partNumber, partCount: manifest.partCount, objects: manifest.objects }
   if (await checksum(manifestCore) !== manifest.integrity.checksum) throw new Error('Storage archive manifest checksum verification failed')
 
   const objects: ManifestEntry[] = []
@@ -322,12 +359,18 @@ Deno.serve(async (request) => {
       return new Response(JSON.stringify(backup, null, 2), { headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="ydg-business-backup-${new Date().toISOString().slice(0, 10)}.json"` } })
     }
 
+    if (action === 'inspect-storage-backup') {
+      const plan = await storageArchivePlan(auth.admin)
+      return json({ ok: true, result: { totalFiles: plan.totalFiles, totalBytes: plan.totalBytes, partCount: plan.parts.length, bucketCounts: plan.bucketCounts, partLimitBytes: ARCHIVE_PART_BYTES } })
+    }
+
     if (action === 'create-storage-archive') {
       const zip = new JSZip()
-      const manifest: ManifestEntry[] = []
+      const plan = await storageArchivePlan(auth.admin)
+      const partIndex = Number(body.partIndex)
+      if (!Number.isSafeInteger(partIndex) || partIndex < 0 || partIndex >= plan.parts.length) throw new BackupError('STORAGE_ARCHIVE_PART_INVALID', 'The requested Storage archive part is invalid.')
+      const manifest = plan.parts[partIndex].map((entry) => ({ ...entry }))
       let totalBytes = 0
-      for (const bucket of BUCKETS) manifest.push(...await bucketManifest(auth.admin, bucket))
-      manifest.sort((a, b) => `${a.bucket}/${a.path}`.localeCompare(`${b.bucket}/${b.path}`))
       for (const entry of manifest) {
         const { data, error } = await auth.admin.storage.from(entry.bucket).download(entry.path)
         if (error || !data) throw new Error('A Storage object could not be archived')
@@ -340,14 +383,14 @@ Deno.serve(async (request) => {
         const maxSize = entry.bucket === 'product-images' ? 500 * 1024 : 5 * 1024 * 1024
         if (entry.size > maxSize) throw new Error('A stored object exceeds its approved bucket size limit')
         totalBytes += entry.size
-        if (totalBytes > MAX_ARCHIVE_BYTES) throw new Error('Storage archive exceeds the 40 MB on-demand safety limit')
+        if (totalBytes > MAX_ARCHIVE_BYTES) throw new BackupError('STORAGE_ARCHIVE_PART_TOO_LARGE', 'A Storage archive part exceeded the 40 MB generation safety limit.')
         entry.checksum = await bytesChecksum(objectBytes)
         zip.file(`${entry.bucket}/${entry.path}`, new Uint8Array(objectBytes))
       }
-      const manifestCore = { application: 'Yadanar Theingi Ecommerce', formatVersion: 'ydg-storage-archive-v1', schemaVersion: SCHEMA_VERSION, createdAt: new Date().toISOString(), createdBy: auth.ownerId, objects: manifest }
+      const manifestCore = { application: 'Yadanar Theingi Ecommerce', formatVersion: 'ydg-storage-archive-v1', schemaVersion: SCHEMA_VERSION, createdAt: new Date().toISOString(), createdBy: auth.ownerId, partNumber: partIndex + 1, partCount: plan.parts.length, objects: manifest }
       zip.file('manifest.json', JSON.stringify({ ...manifestCore, integrity: { algorithm: 'SHA-256', checksum: await checksum(manifestCore) } }, null, 2))
       const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } })
-      return new Response(bytes, { headers: { ...corsHeaders, 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="ydg-storage-archive-${new Date().toISOString().slice(0, 10)}.zip"` } })
+      return new Response(bytes, { headers: { ...corsHeaders, 'Content-Type': 'application/zip', 'X-YDG-Part-Number': String(partIndex + 1), 'X-YDG-Part-Count': String(plan.parts.length), 'Content-Disposition': `attachment; filename="ydg-storage-archive-${new Date().toISOString().slice(0, 10)}-part-${partIndex + 1}-of-${plan.parts.length}.zip"` } })
     }
 
     if (action === 'preview-storage-restore' || action === 'confirm-storage-restore') {
@@ -370,8 +413,10 @@ Deno.serve(async (request) => {
     }
     return json({ ok: false, error: 'Unknown backup action.' }, 400)
   } catch (error) {
-    console.error('business-backup operation failed')
-    const message = error instanceof Error ? error.message : 'Backup operation failed.'
-    return json({ ok: false, error: message }, 400)
+    const code = error instanceof BackupError ? error.code : 'BACKUP_OPERATION_FAILED'
+    const status = error instanceof BackupError ? error.status : 400
+    const message = error instanceof Error ? error.message : 'The secure backup service could not complete this operation.'
+    console.error(JSON.stringify({ event: 'business-backup-failed', code }))
+    return json({ ok: false, code, error: message }, status)
   }
 })
