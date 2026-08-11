@@ -401,7 +401,9 @@ Deno.serve(async (request) => {
     if (action === 'preview-storage-restore' || action === 'confirm-storage-restore') {
       const archiveValue = form?.get('archive')
       if (!(archiveValue instanceof File)) return json({ ok: false, error: 'Private Storage ZIP archive is required.' }, 400)
-      const archive = await validateStorageArchive(archiveValue)
+      let archive: ValidatedArchive
+      try { archive = await validateStorageArchive(archiveValue) }
+      catch (error) { throw new BackupError('STORAGE_ARCHIVE_INVALID', error instanceof Error ? error.message : 'Storage archive validation failed.') }
       const result = action === 'preview-storage-restore'
         ? await createStorageRestorePlan(auth, archive)
         : await restoreStorageArchive(auth, archive, String(form?.get('planId') ?? ''))
@@ -409,7 +411,9 @@ Deno.serve(async (request) => {
     }
 
     if (action === 'preview-restore' || action === 'confirm-restore') {
-      const validated = await validateBackup(body.backup)
+      let validated: Awaited<ReturnType<typeof validateBackup>>
+      try { validated = await validateBackup(body.backup) }
+      catch (error) { throw new BackupError('DATABASE_BACKUP_INVALID', error instanceof Error ? error.message : 'Database backup validation failed.') }
       const rpc = action === 'preview-restore'
         ? await auth.userDb.rpc('preview_business_restore', { p_payload: validated.core, p_checksum: validated.checksum })
         : await auth.userDb.rpc('restore_business_backup', { p_plan_id: body.planId, p_payload: validated.core, p_checksum: validated.checksum })
