@@ -43,7 +43,7 @@
       inspectStorageBackup: function () {
         return invoke('inspect-storage-backup').then(function (response) { return response.result; });
       },
-      createStorageArchive: function (partIndex) { return invoke('create-storage-archive', { partIndex: partIndex }); },
+      createStorageArchive: function (planId, partIndex) { return invoke('create-storage-archive', { planId: planId, partIndex: partIndex }); },
       previewRestore: function (backup) {
         return invoke('preview-restore', { backup: backup }).then(function (response) { return response.result; });
       },

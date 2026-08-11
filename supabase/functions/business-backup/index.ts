@@ -6,7 +6,7 @@ const FORMAT_VERSION = 'ydg-business-backup-v1'
 const SCHEMA_VERSION = '202608110002'
 const MAX_RESTORE_BYTES = 12 * 1024 * 1024
 const MAX_ARCHIVE_BYTES = 40 * 1024 * 1024
-const ARCHIVE_PART_BYTES = 24 * 1024 * 1024
+const ARCHIVE_PART_BYTES = 16 * 1024 * 1024
 const MAX_ARCHIVE_REQUEST_BYTES = MAX_ARCHIVE_BYTES + 1024 * 1024
 const TABLES = ['categories', 'products', 'profiles', 'orders', 'order_items', 'cart_items',
   'inventory_movements', 'voucher_settings', 'app_settings', 'delivery_proofs']
@@ -361,14 +361,19 @@ Deno.serve(async (request) => {
 
     if (action === 'inspect-storage-backup') {
       const plan = await storageArchivePlan(auth.admin)
-      return json({ ok: true, result: { totalFiles: plan.totalFiles, totalBytes: plan.totalBytes, partCount: plan.parts.length, bucketCounts: plan.bucketCounts, partLimitBytes: ARCHIVE_PART_BYTES } })
+      const preview = { operation: 'storage-backup', totalFiles: plan.totalFiles, totalBytes: plan.totalBytes, partCount: plan.parts.length, bucketCounts: plan.bucketCounts, partLimitBytes: ARCHIVE_PART_BYTES, parts: plan.parts }
+      const { data, error } = await auth.admin.from('business_restore_plans').insert({ owner_id: auth.ownerId, backup_checksum: await checksum(preview), backup_type: 'storage', preview }).select('id, expires_at').single()
+      if (error || !data) throw new BackupError('STORAGE_BACKUP_PLAN_FAILED', 'The Storage backup plan could not be created.')
+      return json({ ok: true, result: { planId: data.id, expiresAt: data.expires_at, totalFiles: plan.totalFiles, totalBytes: plan.totalBytes, partCount: plan.parts.length, bucketCounts: plan.bucketCounts, partLimitBytes: ARCHIVE_PART_BYTES } })
     }
 
     if (action === 'create-storage-archive') {
       const zip = new JSZip()
-      const plan = await storageArchivePlan(auth.admin)
+      const { data: storedPlan, error: planError } = await auth.admin.from('business_restore_plans').select('owner_id, preview, expires_at').eq('id', String(body.planId ?? '')).eq('owner_id', auth.ownerId).eq('backup_type', 'storage').maybeSingle()
+      if (planError || !storedPlan || storedPlan.preview?.operation !== 'storage-backup' || Date.parse(storedPlan.expires_at) < Date.now()) throw new BackupError('STORAGE_BACKUP_PLAN_EXPIRED', 'The Storage backup plan expired. Inspect Storage again and retry.')
+      const plan = storedPlan.preview as { parts: ManifestEntry[][]; partCount: number }
       const partIndex = Number(body.partIndex)
-      if (!Number.isSafeInteger(partIndex) || partIndex < 0 || partIndex >= plan.parts.length) throw new BackupError('STORAGE_ARCHIVE_PART_INVALID', 'The requested Storage archive part is invalid.')
+      if (!Number.isSafeInteger(partIndex) || partIndex < 0 || partIndex >= plan.partCount) throw new BackupError('STORAGE_ARCHIVE_PART_INVALID', 'The requested Storage archive part is invalid.')
       const manifest = plan.parts[partIndex].map((entry) => ({ ...entry }))
       let totalBytes = 0
       for (const entry of manifest) {
@@ -387,10 +392,10 @@ Deno.serve(async (request) => {
         entry.checksum = await bytesChecksum(objectBytes)
         zip.file(`${entry.bucket}/${entry.path}`, new Uint8Array(objectBytes))
       }
-      const manifestCore = { application: 'Yadanar Theingi Ecommerce', formatVersion: 'ydg-storage-archive-v1', schemaVersion: SCHEMA_VERSION, createdAt: new Date().toISOString(), createdBy: auth.ownerId, partNumber: partIndex + 1, partCount: plan.parts.length, objects: manifest }
+      const manifestCore = { application: 'Yadanar Theingi Ecommerce', formatVersion: 'ydg-storage-archive-v1', schemaVersion: SCHEMA_VERSION, createdAt: new Date().toISOString(), createdBy: auth.ownerId, partNumber: partIndex + 1, partCount: plan.partCount, objects: manifest }
       zip.file('manifest.json', JSON.stringify({ ...manifestCore, integrity: { algorithm: 'SHA-256', checksum: await checksum(manifestCore) } }, null, 2))
-      const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } })
-      return new Response(bytes, { headers: { ...corsHeaders, 'Content-Type': 'application/zip', 'X-YDG-Part-Number': String(partIndex + 1), 'X-YDG-Part-Count': String(plan.parts.length), 'Content-Disposition': `attachment; filename="ydg-storage-archive-${new Date().toISOString().slice(0, 10)}-part-${partIndex + 1}-of-${plan.parts.length}.zip"` } })
+      const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' })
+      return new Response(bytes, { headers: { ...corsHeaders, 'Content-Type': 'application/zip', 'X-YDG-Part-Number': String(partIndex + 1), 'X-YDG-Part-Count': String(plan.partCount), 'Content-Disposition': `attachment; filename="ydg-storage-archive-${new Date().toISOString().slice(0, 10)}-part-${partIndex + 1}-of-${plan.partCount}.zip"` } })
     }
 
     if (action === 'preview-storage-restore' || action === 'confirm-storage-restore') {
