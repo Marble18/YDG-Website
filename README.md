@@ -31,7 +31,7 @@ Open index.html in a modern browser.
 
 Authentication, accounts, products, categories, inventory, carts, orders, private delivery proofs and shop/voucher settings use Supabase. Browser Local Storage is retained only as a non-authoritative UI cache; it is not used for backup or restore.
 
-Hosted builds access Supabase Auth, REST, Storage and Edge Functions through the site's fixed-target `/supabase` rewrite. The browser still uses only the public publishable key; database RLS, RPC authorization and Edge Function checks remain the security boundary. Localhost and direct-file development use the canonical Supabase project URL because the hosting rewrite is unavailable there.
+Hosted builds access Supabase Auth, REST, Storage and Edge Functions through the site's fixed-target `/supabase` Netlify Edge gateway. The browser still uses only the public publishable key; database RLS, RPC authorization and Edge Function checks remain the security boundary. Localhost and direct-file development use the canonical Supabase project URL because the hosting gateway is unavailable there.
 
 For the production version, add:
 

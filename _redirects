@@ -1,6 +1,0 @@
-# Fixed-target, allowlisted same-origin gateway. Keep these rules before any
-# future SPA fallback. Realtime/GraphQL/admin routes are deliberately excluded.
-/supabase/auth/v1/*       https://tfvwfpvdqcbgqnijhhpd.supabase.co/auth/v1/:splat       200!
-/supabase/rest/v1/*       https://tfvwfpvdqcbgqnijhhpd.supabase.co/rest/v1/:splat       200!
-/supabase/storage/v1/*    https://tfvwfpvdqcbgqnijhhpd.supabase.co/storage/v1/:splat    200!
-/supabase/functions/v1/*  https://tfvwfpvdqcbgqnijhhpd.supabase.co/functions/v1/:splat  200!
