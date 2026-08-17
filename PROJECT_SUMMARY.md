@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-08-10
+Last updated: 2026-08-17
 
 ## 1. Project goal
 
@@ -15,6 +15,7 @@ Yadanar Theingi Stationery & Fancy အတွက် မြန်မာအသု�
 - Production hosting: Netlify (`workers.dev` ကို production link အဖြစ် မသုံးပါ)
 - Authentication, database and files: Supabase
 - Supabase frontend connection: Project URL + publishable key only
+- Hosted browser connection: same-origin `/supabase` allowlisted Netlify Edge gateway for Auth, REST, Storage and Edge Functions; localhost/file development falls back to the direct project URL
 - Secret/service-role keys: frontend, GitHub နှင့် browser console ထဲ လုံးဝမထည့်ရ
 
 ## 3. Completed work
@@ -77,7 +78,7 @@ Database တွင် `profiles`, `categories`, `products`, `orders`, `order_ite
 | Customer/staff accounts | Supabase Auth + protected Edge Functions | Live; PR #11 expands active-staff customer operations |
 | Voucher/settings/maintenance | Supabase `voucher_settings` + `app_settings` | Live in PR #16; browser copy is cache only |
 | Delivery proofs | Private Supabase Storage + `delivery_proofs` | Live since PR #14 |
-| Backup/restore | Protected `business-backup` Edge Function + transactional restore RPC | PR #17 stacked on PR #16; primary owner only, merge mode, separate private Storage ZIP |
+| Backup/restore | Protected `business-backup` Edge Function + transactional restore RPC | Live since combined PR #16/#17; primary owner only, merge mode, separate private Storage ZIP |
 
 ## 5. Target account design
 
@@ -101,6 +102,9 @@ First-version decision:
 ## 6. Security and consistency rules
 
 - Never trust role, price, stock, order total or account ID sent by the frontend.
+- Hosted Supabase traffic uses a fixed-project, allowlisted same-origin proxy. It does not inject service credentials, does not weaken RLS/RPC authorization and does not expose arbitrary upstream destinations.
+- The existing `sb-tfvwfpvdqcbgqnijhhpd-auth-token` storage key is pinned while switching API origins so signed-in sessions are not silently orphaned. Canonical product-image URLs remain stable in PostgreSQL and are converted to the current same-origin path only at render/export time.
+- Realtime/WebSocket and GraphQL routes are not proxied because this application does not use them. The Netlify Edge gateway streams upstream responses but has a 40-second response-header timeout, so long-running database/Storage backup operations require explicit Deploy Preview regression testing.
 - Enforce authorization with RLS plus server-side checks.
 - Product stock updates and matching inventory movements remain transaction-safe inventory operations, independent from ordering.
 - Order creation, items, totals and cart clearing are one server/database transaction. Checkout does not reduce or allocate stock.
@@ -206,3 +210,4 @@ First-version decision:
 - 2026-08-11: Completed the PR #17 Storage recovery follow-up on the combined PR #16 branch. The private ZIP now has its own server-side upload validation, dry-run plan and explicit-confirm restore. Validation checks ZIP structure/CRC, manifest integrity, per-object checksum and size, approved `product-images`/`delivery-proofs` buckets, safe exact paths, image MIME/extension/file signatures, duplicates and unlisted files. Restore is merge-only with `upsert: false`: matching objects are skipped, different existing objects are conflicts, and nothing is overwritten or broadly deleted. Full success consumes/audits the plan; partial failure reports exact successes/failures and keeps the plan retryable so already-created objects safely become skips. Storage operations cannot share the PostgreSQL transaction, so file-level reporting and idempotent retry are the compensation strategy. Remaining manual tests cover owner downloads/dry-runs, tamper/path/MIME rejection, conflict/partial retry, role denial, mobile UI and private delivery-proof access after restore.
 - 2026-08-11: Live Preview debugging found `DATABASE_TABLE_READ_FAILED` on `categories`: the protected Edge Function authenticated the owner correctly, but the backup tables lacked explicit PostgreSQL `service_role` privileges. Migration `202608110004` grants only backup-table reads plus restore-plan/audit writes; browser roles remain denied. Edge errors now return/log safe codes without secrets. Database backup table reads run concurrently, include the linked project reference, and no longer hide non-2xx JSON details. Storage backup now performs a manifest-only inspection first, returns a clear empty state, and divides large backups into deterministic <=16 MB ZIP parts rather than waiting to fail at the former 40 MB aggregate limit. The manifest is saved in a short-lived server plan so each part avoids rescanning all objects; already-compressed images use ZIP `STORE` to stay below Edge CPU limits. Live evidence: database JSON download succeeded; 622 approved files (134.2 MB) downloaded as nine parts; malformed JSON/ZIP files were denied without opening a confirmation modal. Each valid part keeps the same secure validate/dry-run/merge-only restore contract and must be retained/restored separately.
 - 2026-08-11: Started PR #15 on `codex/pr15-brand-logo`. The supplied 2048 px transparent PNG was verified as RGBA and converted non-destructively into a 768 px lossless WebP logo plus 192 px PNG favicon for Login, Customer, Owner/Staff, Voucher and Print use. Responsive/print validation remains before merge.
+- 2026-08-17: Started PR #18 on `codex/pr18-same-origin-supabase-proxy`. Hosted clients now target an allowlisted same-origin `/supabase` Netlify Edge gateway for Auth, REST, Storage and Edge Functions while local development retains a direct-URL fallback. The first static external-rewrite attempt failed because Netlify did not forward the API key and Cloudflare rejects external `_redirects` proxies; it was replaced with a streaming fixed-origin Edge Function. The gateway overwrites `apikey` with the public project key, accepts only that public bearer or a JWT-shaped session bearer, strips cookies/referrer/forwarded-IP headers and never accepts an arbitrary upstream. The project auth storage key is pinned to preserve sessions, and product image URLs remain canonical in the database while rendering through the current origin. Realtime/GraphQL are intentionally excluded; Deploy Preview still needs login, CRUD, upload/signed-URL, backup timeout and direct-domain network-regression testing before merge.

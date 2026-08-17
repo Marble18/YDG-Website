@@ -6,9 +6,10 @@
   var LEGACY_DEMO_CART = 'yt-cart-v2';
   var STORAGE = 'yt-stationery-state-v3';
   var CART_STORAGE = 'yt-cart-v3';
-  var SUPABASE_URL = 'https://tfvwfpvdqcbgqnijhhpd.supabase.co';
-  var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_1TYSPsIChtMyo_NjcSHQZg_A7uS0PsX';
-  var supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  var supabaseConfig = window.YDG_SUPABASE;
+  var supabaseClient = window.supabase.createClient(supabaseConfig.apiUrl, supabaseConfig.publishableKey, {
+    auth: { storageKey: supabaseConfig.authStorageKey }
+  });
   var accountService = window.createAccountService(supabaseClient);
   var productCatalogueService = window.createProductCatalogueService(supabaseClient);
   var categoryService = window.createCategoryService(supabaseClient);
@@ -381,7 +382,7 @@
       stock: Number(row.stock_quantity),
       unit: row.unit === 'box' ? 'box' : 'pcs',
       minimumOrderQuantity: Number(row.minimum_order_quantity) || 1,
-      photo: row.image_url || '',
+      photo: supabaseConfig.runtimeStorageUrl(row.image_url || ''),
       updatedAt: row.updated_at || null,
       bg: '#FCEAF0',
       deleted: !row.is_active
@@ -448,7 +449,7 @@
     var path = productId + '/' + Date.now() + '.' + extension;
     var upload = await supabaseClient.storage.from('product-images').upload(path, file, { upsert: false });
     if (upload.error) throw upload.error;
-    return supabaseClient.storage.from('product-images').getPublicUrl(path).data.publicUrl;
+    return supabaseConfig.canonicalStorageUrl(supabaseClient.storage.from('product-images').getPublicUrl(path).data.publicUrl);
   }
 
   async function refreshCataloguePage(message) {
@@ -1605,7 +1606,7 @@
           photoStatus.classList.remove('success', 'error');
           photo = await uploadProductImage(productIdValue, selectedPhotoFile);
         }
-        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: photo || null, is_active: product ? !product.deleted : true };
+        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: supabaseConfig.canonicalStorageUrl(photo) || null, is_active: product ? !product.deleted : true };
         var result = product
           ? await supabaseClient.rpc('update_product_with_stock', {
             p_product_id: product.id,
