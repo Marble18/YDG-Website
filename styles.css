@@ -399,3 +399,9 @@ td { padding: 12px 10px; border-top: 1px solid var(--line); vertical-align: midd
   .delivery-proof-panel .action-row { display: grid; grid-template-columns: 1fr; }
   .proof-lightbox { min-height: 52vh; }
 }
+
+/* Keep the printable information block two-column even when an A5 print
+   viewport also matches the mobile screen breakpoint declared above. */
+@media print {
+  .voucher-details { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; }
+}
