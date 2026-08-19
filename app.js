@@ -1238,6 +1238,40 @@
       ? order.confirmedTotal : order.total;
   }
 
+  function voucherViewModel(order, voucher) {
+    return {
+      accentColor: voucher.accentColor,
+      title: voucher.title,
+      footer: voucher.footer,
+      orderNumber: order.orderNumber || 'Order',
+      customer: order.customer || 'Customer name',
+      phone: order.phone || 'Phone not recorded',
+      orderDate: order.date || 'Order date not recorded',
+      deliveryDate: order.deliveryDate || '',
+      address: order.address || 'Address not recorded',
+      busStation: order.busStation || '',
+      deliveryProofRecorded: Boolean(order.deliveryProof),
+      items: (order.items || []).map(function (item, index) {
+        var product = getProduct(item.productId);
+        return {
+          number: index + 1,
+          name: product ? product.name : item.productName,
+          quantity: visibleQuantity(order, item),
+          unitPrice: visibleUnitPrice(order, item),
+          lineTotal: visibleLineTotal(order, item)
+        };
+      }),
+      total: visibleOrderTotal(order)
+    };
+  }
+
+  function voucherMarkup(model, extraClass) {
+    var rows = model.items.map(function (item) {
+      return '<tr><td class="voucher-number">' + item.number + '</td><td class="voucher-item-name">' + esc(item.name) + '</td><td class="voucher-number-cell">' + item.quantity + '</td><td class="voucher-money">' + money(item.unitPrice) + '</td><td class="voucher-money">' + money(item.lineTotal) + '</td></tr>';
+    }).join('');
+    return '<section class="voucher' + (extraClass ? ' ' + extraClass : '') + '" style="--voucher-accent:' + esc(model.accentColor) + '"><div class="voucher-top"><div class="voucher-branding"><img class="voucher-logo" src="assets/brand/ydg-logo.webp" alt="Yadanar Theingi logo"><div class="voucher-brand-copy"><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery &amp; Fancy</div></div></div><div class="voucher-order"><b>' + esc(model.title) + '</b><span>' + esc(model.orderNumber) + '</span></div></div><div class="voucher-details"><div class="voucher-customer"><span>Customer</span><b>' + esc(model.customer) + '</b><small>' + esc(model.phone) + '</small></div><div class="voucher-delivery"><div><span>Order Date</span><b>' + esc(model.orderDate) + '</b>' + (model.deliveryDate ? '<small>Delivery date: ' + esc(model.deliveryDate) + '</small>' : '') + '</div><div><span>Delivery Address</span><b>' + esc(model.address) + '</b>' + (model.busStation ? '<small>Bus station: ' + esc(model.busStation) + '</small>' : '') + '</div></div></div><div class="table-wrap voucher-table-wrap"><table class="voucher-table"><colgroup><col class="voucher-col-number"><col class="voucher-col-item"><col class="voucher-col-qty"><col class="voucher-col-price"><col class="voucher-col-total"></colgroup><thead><tr><th>No</th><th>Item</th><th>Qty</th><th>Unit Price</th><th>Line Total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total voucher-total"><span>Order Total Amount</span><b>' + money(model.total) + '</b></div>' + (model.deliveryProofRecorded ? '<p class="voucher-proof-recorded">Delivery proof recorded</p>' : '') + '<p class="voucher-footer">' + esc(model.footer) + '</p></section>';
+  }
+
   async function updateStatus(orderId, status) {
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order) return;
@@ -1845,7 +1879,16 @@
   }
 
   function voucherPreview(voucher) {
-    return '<section class="voucher voucher-preview" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>#YT-1008</span></div></div><div class="voucher-details"><div><span>Customer</span><b>Customer name</b><small>09xxxxxxxxx</small></div><div><span>Status</span>' + badge('Ready to Ship') + '<small>Order date</small></div></div><div class="voucher-address"><span>Delivery address</span><b>Customer delivery address will appear here</b><small>Bus station: Optional for out-of-town orders</small></div><div class="voucher-preview-lines"><span>Product items and confirmed quantities</span><b>Total: 00,000 MMK</b></div><p class="voucher-footer">' + esc(voucher.footer) + '</p></section>';
+    var sampleOrder = {
+      orderNumber: '#YT-1008', customer: 'Customer name', phone: '09xxxxxxxxx', date: '18/08/2026',
+      address: 'Customer delivery address will appear here', busStation: 'Optional for out-of-town orders',
+      status: 'Ready to Ship', deliveryProof: null,
+      items: [
+        { productId: '', productName: 'Sample stationery product', quantity: 1, unitPrice: 1000, lineTotal: 1000, confirmedQuantity: 2, confirmedUnitPrice: 1200, confirmedLineTotal: 2400 },
+        { productId: '', productName: 'Another product with a longer name', quantity: 1, unitPrice: 500, lineTotal: 500, confirmedQuantity: 1, confirmedUnitPrice: 500, confirmedLineTotal: 500 }
+      ], total: 1500, confirmedTotal: 2900
+    };
+    return voucherMarkup(voucherViewModel(sampleOrder, voucher), 'voucher-preview');
   }
 
   function renderLiveVoucherPreview() {
@@ -2125,11 +2168,11 @@
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order || (!['owner', 'staff'].includes(currentUser.role) && currentUser.id !== order.customerId)) return;
     var voucher = state.settings.voucher;
-    var rows = order.items.map(function (item) {
-      var product = getProduct(item.productId);
-      return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
-    }).join('');
+    var voucherHtml = voucherMarkup(voucherViewModel(order, voucher));
+    modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + voucherHtml + '<div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
+    /* PR #19 replaces the legacy voucher markup below with the shared renderer.
     modal('<div class="modal-head no-print"><div><p class="eyebrow">Order voucher</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div><section class="voucher" style="--voucher-accent:' + esc(voucher.accentColor) + '"><div class="voucher-top"><div><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery & Fancy</div></div><div class="voucher-order"><b>' + esc(voucher.title) + '</b><span>' + esc(order.orderNumber || 'Order') + '</span></div></div><div class="voucher-details"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Status</span>' + badge(order.status) + '<small>Order date: ' + order.date + '</small>' + (order.deliveryDate ? '<small>Delivery date: ' + esc(order.deliveryDate) + '</small>' : '') + '</div></div><div class="voucher-address"><span>Delivery address</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + (order.deliveryProof ? '<p class="voucher-proof-recorded">Delivery proof recorded</p>' : '') + '<p class="voucher-footer">' + esc(voucher.footer) + '</p></section><div class="two-button no-print"><button class="primary" id="print-voucher">Print voucher</button></div>');
+    */
     var savedPaper = localStorage.getItem('yadanar-voucher-paper-size') || 'a4';
     var printButton = document.getElementById('print-voucher');
     printButton.insertAdjacentHTML('beforebegin', '<label class="voucher-print-size">Print size<select id="voucher-paper-size"><option value="a4" ' + (savedPaper === 'a4' ? 'selected' : '') + '>A4</option><option value="a5" ' + (savedPaper === 'a5' ? 'selected' : '') + '>A5</option></select></label>');
