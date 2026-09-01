@@ -652,10 +652,29 @@
   function renderPhotoPreview(productId) {
     var product = getProduct(productId);
     if (!product || !/^(data:image\/|https:\/\/)/.test(String(product.photo || ''))) return;
-    modal('<div class="modal-head"><div><p class="eyebrow">Product photo</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" aria-label="Close photo preview">×</button></div><div class="photo-lightbox loading" id="photo-lightbox"><span>Loading image…</span><img src="' + esc(product.photo) + '" alt="' + esc(product.name) + '"></div>');
+    modal('<div class="modal-head"><div><p class="eyebrow">Product photo</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" aria-label="Close photo preview">×</button></div><div class="photo-lightbox loading" id="photo-lightbox" aria-busy="true"><div class="photo-lightbox-state" id="photo-lightbox-state"><span class="photo-loading-spinner" role="status" aria-label="Loading image"></span></div><img src="' + esc(product.photo) + '" alt="' + esc(product.name) + '"></div>');
+    var lightbox = document.getElementById('photo-lightbox');
+    var state = document.getElementById('photo-lightbox-state');
     var image = document.querySelector('#photo-lightbox img');
-    image.addEventListener('load', function () { image.parentElement.classList.remove('loading'); });
-    image.addEventListener('error', function () { image.parentElement.className = 'photo-lightbox error'; image.parentElement.innerHTML = '<span>Photo could not be loaded.</span>'; });
+    function showLoadedImage() {
+      lightbox.classList.remove('loading', 'error');
+      lightbox.setAttribute('aria-busy', 'false');
+      state.hidden = true;
+    }
+    function showImageError() {
+      lightbox.classList.remove('loading');
+      lightbox.classList.add('error');
+      lightbox.setAttribute('aria-busy', 'false');
+      image.hidden = true;
+      state.hidden = false;
+      state.innerHTML = '<span class="photo-lightbox-error" role="alert">Image could not be loaded.</span>';
+    }
+    image.addEventListener('load', showLoadedImage, { once: true });
+    image.addEventListener('error', showImageError, { once: true });
+    if (image.complete) {
+      if (image.naturalWidth > 0) showLoadedImage();
+      else showImageError();
+    }
   }
 
   function renderCustomerMenu() {

@@ -211,11 +211,15 @@ td { padding: 12px 10px; border-top: 1px solid var(--line); vertical-align: midd
 .form-grid .full-field { grid-column: 1/-1; }
 .two-button { display: flex; justify-content: end; gap: 10px; margin-top: 23px; }
 .cart-empty { color: var(--muted); text-align: center; padding: 25px 0; }
-.photo-lightbox { display: grid; place-items: center; margin-top: 18px; border-radius: 12px; overflow: hidden; background: var(--cream); }
-.photo-lightbox img { max-width: 100%; max-height: 70vh; display: block; object-fit: contain; }
-.photo-lightbox.loading img { opacity: 0; max-height: 1px; }
-.photo-lightbox.loading, .photo-lightbox.error { min-height: 220px; color: var(--muted); }
-.photo-lightbox > span { padding: 24px; text-align: center; }
+.photo-lightbox { position: relative; display: grid; min-height: min(70vh, 520px); place-items: center; margin-top: 18px; border-radius: 12px; overflow: hidden; background: var(--cream); }
+.photo-lightbox img { display: block; width: auto; height: auto; max-width: 100%; max-height: 70vh; object-fit: contain; object-position: center; }
+.photo-lightbox.loading img { opacity: 0; }
+.photo-lightbox-state { position: absolute; z-index: 1; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--muted); text-align: center; pointer-events: none; }
+.photo-lightbox-state[hidden] { display: none; }
+.photo-loading-spinner { width: 28px; height: 28px; border: 3px solid rgba(145, 75, 103, .2); border-top-color: var(--wine); border-radius: 50%; animation: photo-spinner .75s linear infinite; }
+.photo-lightbox-error { max-width: 280px; line-height: 1.5; }
+@keyframes photo-spinner { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .photo-loading-spinner { animation-duration: 1.5s; } }
 .customer-menu-backdrop { position: fixed; inset: 0; z-index: 19; background: rgba(26, 14, 20, .36); }
 .customer-menu-panel { position: fixed; z-index: 21; top: 0; right: 0; width: min(360px, 90vw); height: 100vh; padding: 28px; background: var(--surface); box-shadow: -18px 0 50px rgba(91,37,58,.18); animation: slide-in .2s ease-out; }
 .customer-menu-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding-bottom: 21px; border-bottom: 1px solid var(--line); }
