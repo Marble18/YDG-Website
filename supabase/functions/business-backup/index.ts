@@ -3,7 +3,7 @@ import { corsHeaders, json } from '../_shared/http.ts'
 import { adminClient, publicClient, userClient } from '../_shared/supabase.ts'
 
 const FORMAT_VERSION = 'ydg-business-backup-v1'
-const SCHEMA_VERSION = '202608110002'
+const SCHEMA_VERSION = '202609020001'
 const MAX_RESTORE_BYTES = 12 * 1024 * 1024
 const MAX_ARCHIVE_BYTES = 40 * 1024 * 1024
 const ARCHIVE_PART_BYTES = 16 * 1024 * 1024
