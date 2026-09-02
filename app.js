@@ -1077,7 +1077,7 @@
     results.innerHTML = products.length ? '<table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) {
       var status = product.inactive ? '<span class="badge disabled">Inactive</span>' : '<span class="badge active">Active</span>';
       var availabilityAction = product.inactive ? '<button class="table-action" data-reactivate-product="' + product.id + '">Activate</button>' : '<button class="table-action" data-deactivate-product="' + product.id + '">Deactivate</button>';
-      var permanentDelete = currentUser.role === 'owner' ? '<button class="table-action delete-action" data-delete-product="' + product.id + '">Delete</button>' : '';
+      var permanentDelete = currentUser.role === 'owner' ? '<button class="table-action delete-action" data-delete-product="' + product.id + '" title="Permanently delete this product">Permanently delete</button>' : '';
       return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button>' + availabilityAction + permanentDelete + '</div></td></tr>';
     }).join('') + '</tbody></table>' : '<div class="empty">No matching products found.</div>';
     bindProductTableActions(results);
