@@ -1077,7 +1077,7 @@
     results.innerHTML = products.length ? '<table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) {
       var status = product.inactive ? '<span class="badge disabled">Inactive</span>' : '<span class="badge active">Active</span>';
       var availabilityAction = product.inactive ? '<button class="table-action" data-reactivate-product="' + product.id + '">Activate</button>' : '<button class="table-action" data-deactivate-product="' + product.id + '">Deactivate</button>';
-      var permanentDelete = currentUser.role === 'owner' ? '<button class="table-action delete-action" data-delete-product="' + product.id + '" title="Permanently delete this product">Permanently delete</button>' : '';
+      var permanentDelete = ['owner', 'staff'].includes(currentUser.role) ? '<button class="table-action delete-action" data-delete-product="' + product.id + '" title="Permanently delete this product">Permanently delete</button>' : '';
       return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button>' + availabilityAction + permanentDelete + '</div></td></tr>';
     }).join('') + '</tbody></table>' : '<div class="empty">No matching products found.</div>';
     bindProductTableActions(results);
@@ -1694,7 +1694,7 @@
 
   function renderProductDelete(productId) {
     var product = getProduct(productId);
-    if (!product || currentUser.role !== 'owner') return;
+    if (!product || !['owner', 'staff'].includes(currentUser.role)) return;
     modal('<form id="delete-product-form"><div class="modal-head"><div><p class="eyebrow">Permanent deletion</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="inline-error" role="alert"><b>ဒီလုပ်ဆောင်ချက်ကို ပြန်ပြင်လို့မရပါ။</b> Product ကို catalogue, filters, export နဲ့ carts မှ အပြီးဖယ်ပါမယ်။ Existing orders, vouchers နဲ့ inventory history ကို snapshot ဖြင့်ဆက်ထိန်းပါမယ်။</div><label class="field">အတည်ပြုရန် product name ကိုရိုက်ပါ<input name="confirmation" required autocomplete="off" placeholder="' + esc(product.name) + '"></label><div class="two-button"><button class="secondary" id="cancel-delete" type="button">Cancel</button><button class="danger" type="submit">Permanently delete</button></div></form>');
     document.getElementById('cancel-delete').addEventListener('click', closeModal);
     document.getElementById('delete-product-form').addEventListener('submit', async function (event) {

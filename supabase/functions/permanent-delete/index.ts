@@ -41,7 +41,6 @@ Deno.serve(async (request) => {
     const body = await request.json()
 
     if (body.action === 'delete-product') {
-      if (auth.caller.role !== 'owner') return json({ ok: false, code: 'OWNER_REQUIRED', message: 'Only an active owner can permanently delete a product.' }, 403)
       const productId = validId(body.productId)
       if (!productId) return json({ ok: false, code: 'INVALID_PRODUCT', message: 'Select a valid product.' }, 400)
       const { data, error } = await userClient(auth.token).rpc('tombstone_product', { p_product_id: productId })
