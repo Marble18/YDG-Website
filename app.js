@@ -941,7 +941,7 @@
 
   function productsPage() {
     var categoryOptions = state.categories.map(function (category) { return '<option value="' + category.id + '" ' + (String(ownerCatalogue.categoryId) === String(category.id) ? 'selected' : '') + '>' + esc(category.name) + '</option>'; }).join('');
-    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Search and manage the catalogue without loading every product at once.</p></div><div class="action-row"><button class="secondary" id="export-products">Export products</button><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><section class="panel catalogue-toolbar"><label class="field">Search products<input id="owner-product-search" value="' + esc(ownerCatalogue.search) + '" placeholder="Product name..." autocomplete="off"></label><label class="field">Category<select id="owner-product-category"><option value="">All Categories</option>' + categoryOptions + '</select></label><label class="field">Status<select id="owner-product-status"><option value="all" ' + (ownerCatalogue.visibility === 'all' ? 'selected' : '') + '>Active and inactive</option><option value="active" ' + (ownerCatalogue.visibility === 'active' ? 'selected' : '') + '>Active only</option><option value="inactive" ' + (ownerCatalogue.visibility === 'inactive' ? 'selected' : '') + '>Inactive only</option></select></label></section><div class="catalogue-result-heading"><span id="owner-product-count" aria-live="polite"></span></div><div class="panel table-wrap" id="owner-product-results" aria-busy="true"></div><div class="catalogue-more" id="owner-product-more"></div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Search and manage the catalogue without loading every product at once.</p></div><div class="action-row"><button class="secondary" id="pcs-box-prototype">Pcs/Box UI prototype</button><button class="secondary" id="export-products">Export products</button><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><section class="panel catalogue-toolbar"><label class="field">Search products<input id="owner-product-search" value="' + esc(ownerCatalogue.search) + '" placeholder="Product name..." autocomplete="off"></label><label class="field">Category<select id="owner-product-category"><option value="">All Categories</option>' + categoryOptions + '</select></label><label class="field">Status<select id="owner-product-status"><option value="all" ' + (ownerCatalogue.visibility === 'all' ? 'selected' : '') + '>Active and inactive</option><option value="active" ' + (ownerCatalogue.visibility === 'active' ? 'selected' : '') + '>Active only</option><option value="inactive" ' + (ownerCatalogue.visibility === 'inactive' ? 'selected' : '') + '>Inactive only</option></select></label></section><div class="catalogue-result-heading"><span id="owner-product-count" aria-live="polite"></span></div><div class="panel table-wrap" id="owner-product-results" aria-busy="true"></div><div class="catalogue-more" id="owner-product-more"></div>';
   }
 
   function categoriesPage() {
@@ -1134,6 +1134,7 @@
     document.querySelectorAll('[data-reset-account]').forEach(function (button) { button.addEventListener('click', function () { renderPasswordResetForm(button.dataset.resetAccount); }); });
     document.querySelectorAll('[data-delete-customer]').forEach(function (button) { button.addEventListener('click', function () { renderCustomerPermanentDelete(button.dataset.deleteCustomer); }); });
     var newProduct = document.getElementById('new-product'); if (newProduct) newProduct.addEventListener('click', function () { renderProductForm(); });
+    var pcsBoxPrototype = document.getElementById('pcs-box-prototype'); if (pcsBoxPrototype) pcsBoxPrototype.addEventListener('click', renderPcsBoxPrototype);
     var exportProducts = document.getElementById('export-products'); if (exportProducts) exportProducts.addEventListener('click', renderDatabaseProductExport);
     var adjustCategory = document.getElementById('adjust-category'); if (adjustCategory) adjustCategory.addEventListener('click', renderDatabaseCategoryAdjust);
     var newStock = document.getElementById('new-stock'); if (newStock) newStock.addEventListener('click', renderStockForm);
@@ -1690,6 +1691,93 @@
         submitButton.textContent = 'Save product';
       }
     });
+  }
+
+  function renderPcsBoxPrototype() {
+    modal('<form id="pcs-box-prototype-form" class="pcs-box-prototype" novalidate><div class="modal-head"><div><p class="eyebrow">UI draft only · No data will be saved</p><h2>Pcs/Box ordering prototype</h2></div><button class="icon-btn" id="close-modal" type="button" aria-label="Close">×</button></div><p class="subtext">ဒီနေရာက ပုံစံစမ်းကြည့်ရန်သာဖြစ်ပြီး Product၊ Cart နဲ့ Order data တစ်ခုမှ မပြောင်းပါ။</p><div class="prototype-layout"><section class="prototype-editor"><h3>Owner product form draft</h3><label class="field">Product name<input name="productName" value="Color Pencil" maxlength="100"></label><fieldset class="prototype-unit-setup"><legend>Sales unit setup</legend><div class="prototype-segments" role="radiogroup" aria-label="Sales unit setup"><label><input type="radio" name="salesMode" value="pcs"><span>Pcs only</span></label><label><input type="radio" name="salesMode" value="box"><span>Box only</span></label><label><input type="radio" name="salesMode" value="both" checked><span>Pcs + Box</span></label></div></fieldset><div class="form-grid"><div class="prototype-fields" data-mode-fields="pcs"><label class="field">Price per pcs (MMK)<input name="pcsPrice" type="number" min="0" step="1" value="1000" inputmode="decimal"><small class="field-error" data-error-for="pcsPrice"></small></label><label class="field">Minimum pcs order quantity<input name="minimumPcs" type="number" min="1" step="1" value="2" inputmode="numeric"><small class="field-error" data-error-for="minimumPcs"></small></label></div><div class="prototype-fields" data-mode-fields="box"><label class="field">Pieces per box<input name="piecesPerBox" type="number" min="1" step="1" value="12" inputmode="numeric"><small class="field-error" data-error-for="piecesPerBox"></small></label><label class="field">Price per box (MMK)<input name="boxPrice" type="number" min="0" step="1" value="11000" inputmode="decimal"><small class="field-error" data-error-for="boxPrice"></small></label><label class="field">Minimum box order quantity<input name="minimumBox" type="number" min="1" step="1" value="1" inputmode="numeric"><small class="field-error" data-error-for="minimumBox"></small></label></div><label class="field full-field">Stock quantity (pcs)<input name="stockPcs" type="number" min="0" step="1" value="125" inputmode="numeric"><small class="field-error" data-error-for="stockPcs"></small><small class="stock-equivalent" id="prototype-stock-helper"></small></label></div><div class="box-price-helper" id="prototype-box-value" aria-live="polite"></div><div class="prototype-validation-status" id="prototype-validation-status" aria-live="polite"></div><button class="secondary full" type="submit">Validate prototype values</button></section><section class="prototype-previews" aria-label="Live customer previews"><div class="prototype-customer-card" aria-live="polite"><p class="eyebrow">Customer product card preview</p><h3 id="prototype-card-name">Color Pencil</h3><div id="prototype-card-prices"></div><div class="prototype-segments customer-unit-choice" id="prototype-customer-units" role="radiogroup" aria-label="Choose buying unit"></div><label class="field">Quantity<input name="previewQuantity" type="number" min="1" step="1" value="2" inputmode="numeric"><small class="field-error" data-error-for="previewQuantity"></small></label><div class="prototype-total" id="prototype-total"></div><button class="primary full" type="button" disabled>Preview only · Add to Cart disabled</button></div><div class="prototype-cart-line" aria-live="polite"><p class="eyebrow">Sample cart line preview</p><div id="prototype-cart-preview"></div></div></section></div></form>');
+    document.querySelector('#modal-root .modal').classList.add('modal-wide');
+    var form = document.getElementById('pcs-box-prototype-form');
+
+    function numberValue(name) { return Number(form.elements[name].value); }
+    function positiveWhole(value) { return Number.isInteger(value) && value > 0; }
+    function nonNegativeWhole(value) { return Number.isInteger(value) && value >= 0; }
+    function setError(name, message) {
+      var input = form.elements[name];
+      var error = form.querySelector('[data-error-for="' + name + '"]');
+      input.setAttribute('aria-invalid', message ? 'true' : 'false');
+      if (error) error.textContent = message || '';
+      return !message;
+    }
+    function selectedMode() { return form.elements.salesMode.value; }
+    function selectedBuyingUnit() {
+      var checked = form.querySelector('input[name="previewUnit"]:checked');
+      return checked ? checked.value : (selectedMode() === 'box' ? 'box' : 'pcs');
+    }
+    function syncModeFields() {
+      var mode = selectedMode();
+      form.querySelectorAll('[data-mode-fields]').forEach(function (section) {
+        var enabled = mode === 'both' || mode === section.dataset.modeFields;
+        section.hidden = !enabled;
+        section.querySelectorAll('input').forEach(function (input) { input.disabled = !enabled; input.required = enabled; });
+      });
+      var choices = [];
+      if (mode !== 'box') choices.push({ value: 'pcs', label: 'Buy by pcs' });
+      if (mode !== 'pcs') choices.push({ value: 'box', label: 'Buy by box' });
+      var previous = selectedBuyingUnit();
+      if (!choices.some(function (choice) { return choice.value === previous; })) previous = choices[0].value;
+      document.getElementById('prototype-customer-units').innerHTML = choices.map(function (choice) { return '<label><input type="radio" name="previewUnit" value="' + choice.value + '" ' + (choice.value === previous ? 'checked' : '') + '><span>' + choice.label + '</span></label>'; }).join('');
+    }
+    function renderPrototype(showSuccess) {
+      syncModeFields();
+      var mode = selectedMode();
+      var pcsEnabled = mode !== 'box';
+      var boxEnabled = mode !== 'pcs';
+      var pcsPrice = numberValue('pcsPrice');
+      var piecesPerBox = numberValue('piecesPerBox');
+      var boxPrice = numberValue('boxPrice');
+      var minimumPcs = numberValue('minimumPcs');
+      var minimumBox = numberValue('minimumBox');
+      var stock = numberValue('stockPcs');
+      var unit = selectedBuyingUnit();
+      var minimum = unit === 'box' ? minimumBox : minimumPcs;
+      var quantity = numberValue('previewQuantity');
+      var valid = true;
+      valid = setError('pcsPrice', pcsEnabled && (!Number.isFinite(pcsPrice) || pcsPrice < 0) ? 'Price must be 0 or more.' : '') && valid;
+      valid = setError('minimumPcs', pcsEnabled && !positiveWhole(minimumPcs) ? 'Enter a positive whole number.' : '') && valid;
+      valid = setError('piecesPerBox', boxEnabled && !positiveWhole(piecesPerBox) ? 'Enter a positive whole number.' : '') && valid;
+      valid = setError('boxPrice', boxEnabled && (!Number.isFinite(boxPrice) || boxPrice < 0) ? 'Price must be 0 or more.' : '') && valid;
+      valid = setError('minimumBox', boxEnabled && !positiveWhole(minimumBox) ? 'Enter a positive whole number.' : '') && valid;
+      valid = setError('stockPcs', !nonNegativeWhole(stock) ? 'Stock must be 0 or a positive whole number.' : '') && valid;
+      valid = setError('previewQuantity', !positiveWhole(quantity) || (positiveWhole(minimum) && quantity < minimum) ? 'Quantity must be at least ' + (positiveWhole(minimum) ? minimum : 1) + ' ' + unit + '.' : '') && valid;
+      var stockHelper = 'Enter valid stock and pieces per box to see the equivalent.';
+      if (nonNegativeWhole(stock) && boxEnabled && positiveWhole(piecesPerBox)) {
+        var fullBoxes = Math.floor(stock / piecesPerBox), remaining = stock % piecesPerBox;
+        stockHelper = stock + ' pcs = ' + fullBoxes + ' full box' + (fullBoxes === 1 ? '' : 'es') + (remaining ? ' + ' + remaining + ' pcs' : '');
+      } else if (nonNegativeWhole(stock)) stockHelper = stock + ' pcs in stock';
+      document.getElementById('prototype-stock-helper').textContent = stockHelper;
+      var regularValue = pcsEnabled && boxEnabled && Number.isFinite(pcsPrice) && pcsPrice >= 0 && positiveWhole(piecesPerBox) ? pcsPrice * piecesPerBox : null;
+      document.getElementById('prototype-box-value').innerHTML = regularValue === null || !Number.isFinite(boxPrice) || boxPrice < 0 ? '<b>Box price helper</b><span>Add valid pcs and box values to compare prices.</span>' : '<b>Regular box value: ' + money(regularValue) + '</b><span>Owner box price: ' + money(boxPrice) + (regularValue > boxPrice ? ' · Customer saves ' + money(regularValue - boxPrice) : regularValue < boxPrice ? ' · ' + money(boxPrice - regularValue) + ' above pcs value' : ' · Same as pcs value') + '</span>';
+      var name = String(form.elements.productName.value || '').trim() || 'Product name';
+      document.getElementById('prototype-card-name').textContent = name;
+      var priceLines = [];
+      if (pcsEnabled) priceLines.push('<b>' + money(pcsPrice) + ' / pcs</b><span>Minimum ' + minimumPcs + ' pcs</span>');
+      if (boxEnabled) priceLines.push('<b>' + money(boxPrice) + ' / box</b><span>1 box = ' + piecesPerBox + ' pcs · Minimum ' + minimumBox + ' box' + (minimumBox === 1 ? '' : 'es') + '</span>');
+      document.getElementById('prototype-card-prices').innerHTML = priceLines.join('');
+      form.elements.previewQuantity.min = positiveWhole(minimum) ? minimum : 1;
+      var unitPrice = unit === 'box' ? boxPrice : pcsPrice;
+      var equivalent = unit === 'box' && positiveWhole(quantity) && positiveWhole(piecesPerBox) ? quantity * piecesPerBox : null;
+      var total = Number.isFinite(unitPrice) && positiveWhole(quantity) ? unitPrice * quantity : 0;
+      document.getElementById('prototype-total').innerHTML = unit === 'box' ? '<b>' + quantity + ' box' + (quantity === 1 ? '' : 'es') + ' = ' + (equivalent === null ? '—' : equivalent) + ' pcs</b><span>' + quantity + ' × ' + money(unitPrice) + ' = ' + money(total) + '</span>' : '<b>' + quantity + ' pcs × ' + money(unitPrice) + '</b><span>Total: ' + money(total) + '</span>';
+      document.getElementById('prototype-cart-preview').innerHTML = '<b>' + esc(name) + '</b><span>' + quantity + ' ' + (unit === 'box' ? (quantity === 1 ? 'box' : 'boxes') : 'pcs') + ' × ' + money(unitPrice) + '</span>' + (equivalent !== null ? '<span>Equivalent quantity: ' + equivalent + ' pcs</span>' : '') + '<strong>Total: ' + money(total) + '</strong>';
+      var status = document.getElementById('prototype-validation-status');
+      status.className = 'prototype-validation-status ' + (valid ? 'valid' : 'error');
+      status.textContent = valid ? (showSuccess ? 'Prototype values are valid. Nothing was saved.' : 'Live preview ready · Nothing will be saved.') : 'Please correct the highlighted prototype fields.';
+      return valid;
+    }
+    form.addEventListener('input', function () { renderPrototype(false); });
+    form.addEventListener('change', function () { renderPrototype(false); });
+    form.addEventListener('submit', function (event) { event.preventDefault(); if (renderPrototype(true)) toast('Prototype values are valid. No live data was changed.'); });
+    renderPrototype(false);
   }
 
   function renderProductDelete(productId) {
