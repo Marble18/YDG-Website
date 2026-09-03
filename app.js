@@ -11,6 +11,7 @@
     auth: { storageKey: supabaseConfig.authStorageKey }
   });
   var accountService = window.createAccountService(supabaseClient);
+  var deletionService = window.createDeletionService(supabaseClient);
   var productCatalogueService = window.createProductCatalogueService(supabaseClient);
   var categoryService = window.createCategoryService(supabaseClient);
   var orderService = window.createOrderService(supabaseClient);
@@ -229,11 +230,13 @@
 
   async function loadRemoteCart() {
     var rows = await orderService.listCart();
-    remoteCart = rows.filter(function (row) { return row.products && row.products.is_active; }).map(function (row) {
+    var usableRows = rows.filter(function (row) { return row.products && row.products.is_active && !row.products.deleted_at; });
+    remoteCart = usableRows.map(function (row) {
       var product = mapDatabaseProduct(Object.assign({}, row.products, { categories: null, category_id: null, stock_quantity: 0 }));
       mergeProductCache([product]);
       return { productId: row.product_id, quantity: Number(row.quantity) };
     });
+    if (rows.length > usableRows.length) toast('A removed or unavailable product was cleared from your cart.');
   }
 
   async function migrateLegacyCartOnce() {
@@ -248,7 +251,7 @@
         var item = legacy[index];
         var product = products.find(function (entry) { return String(entry.id) === String(item && item.productId); });
         var quantity = Number(item && item.quantity);
-        if (product && !product.deleted && Number.isInteger(quantity) && quantity >= product.minimumOrderQuantity) {
+        if (product && !product.deleted && !product.inactive && Number.isInteger(quantity) && quantity >= product.minimumOrderQuantity) {
           await orderService.setCartItem(product.id, quantity);
         }
       }
@@ -274,7 +277,7 @@
     var proof = Array.isArray(row.delivery_proofs) ? row.delivery_proofs[0] : row.delivery_proofs;
     return {
       id: row.id, orderNumber: row.order_number || 'Order', customerId: row.customer_id,
-      customer: row.profiles ? (row.profiles.full_name || row.profiles.username) : 'Customer',
+      customer: row.profiles ? (row.profiles.full_name || row.profiles.username) : (row.customer_name_snapshot || row.customer_username_snapshot || 'Deleted customer'),
       items: (row.order_items || []).map(function (item) { return {
         id: item.id, productId: item.product_id, productName: item.product_name, unit: item.unit,
         unitPrice: Number(item.unit_price), quantity: Number(item.quantity), lineTotal: Number(item.line_total),
@@ -385,7 +388,8 @@
       photo: supabaseConfig.runtimeStorageUrl(row.image_url || ''),
       updatedAt: row.updated_at || null,
       bg: '#FCEAF0',
-      deleted: !row.is_active
+      inactive: !row.is_active,
+      deleted: Boolean(row.deleted_at)
     };
   }
 
@@ -400,7 +404,7 @@
 
     var inventoryResult = await supabaseClient
       .from('inventory_movements')
-      .select('id, product_id, movement_type, quantity, note, created_at, products(name)')
+      .select('id, product_id, product_name_snapshot, movement_type, quantity, note, created_at, products(name)')
       .order('created_at', { ascending: false })
       .limit(100);
     if (inventoryResult.error) throw inventoryResult.error;
@@ -411,7 +415,7 @@
       return {
         id: row.id,
         productId: row.product_id,
-        product: row.products ? row.products.name : 'Unknown product',
+        product: row.product_name_snapshot || (row.products ? row.products.name : 'Deleted product'),
         type: row.movement_type === 'stock_in' ? 'IN' : (row.movement_type === 'stock_out' ? 'OUT' : 'ADJUST'),
         quantity: row.quantity,
         date: new Date(row.created_at).toLocaleDateString('en-GB'),
@@ -741,8 +745,9 @@
     document.querySelectorAll('[data-cart-quantity]').forEach(function (input) {
       input.addEventListener('change', async function () {
         var item = cart().find(function (entry) { return String(entry.productId) === input.dataset.cartQuantity; });
-        var product = getProduct(item.productId);
+        var product = item ? getProduct(item.productId) : null;
         var quantity = Number(input.value);
+        if (!product) return toast('This product is no longer available and will be removed from your cart.');
         if (!Number.isInteger(quantity) || quantity < product.minimumOrderQuantity) return toast('Quantity is below the product minimum.');
         try { await orderService.setCartItem(item.productId, quantity); await renderCart(); } catch (error) { toast(error.message || 'Cart could not be updated.'); }
       });
@@ -810,8 +815,7 @@
       return '<div>Shop adjusted quantity from ' + item.quantity + ' to ' + item.confirmedQuantity + ' for ' + esc(item.productName) + '.</div>';
     }).join('');
     var rows = order.items.map(function (item) {
-      var product = getProduct(item.productId);
-      return '<tr><td>' + esc(product ? product.name : item.productName) + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
+      return '<tr><td>' + esc(item.productName || 'Deleted product') + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
     modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + deliveryProofPanel(order, !isCustomer) + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
     bindDeliveryProofActions(order);
@@ -851,7 +855,7 @@
     if (!target) return;
     dashboardLowStock.loading = true;
     try {
-      var result = await supabaseClient.from('products').select('id, name, stock_quantity, category_id, categories(name)', { count: 'exact' }).eq('is_active', true).lt('stock_quantity', 10).order('stock_quantity', { ascending: true }).order('id', { ascending: true }).limit(10);
+      var result = await supabaseClient.from('products').select('id, name, stock_quantity, category_id, deleted_at, categories(name)', { count: 'exact' }).is('deleted_at', null).eq('is_active', true).lt('stock_quantity', 10).order('stock_quantity', { ascending: true }).order('id', { ascending: true }).limit(10);
       if (result.error) throw result.error;
       dashboardLowStock.items = (result.data || []).map(mapDatabaseProduct);
       dashboardLowStock.total = Number(result.count) || 0;
@@ -1071,9 +1075,10 @@
     }
     var products = ownerCatalogue.items;
     results.innerHTML = products.length ? '<table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Unit / minimum</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>' + products.map(function (product) {
-      var status = product.deleted ? '<span class="badge disabled">Inactive</span>' : '<span class="badge active">Active</span>';
-      var availabilityAction = product.deleted ? '<button class="table-action" data-reactivate-product="' + product.id + '">Reactivate</button>' : '<button class="table-action delete-action" data-delete-product="' + product.id + '">Deactivate</button>';
-      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button>' + availabilityAction + '</div></td></tr>';
+      var status = product.inactive ? '<span class="badge disabled">Inactive</span>' : '<span class="badge active">Active</span>';
+      var availabilityAction = product.inactive ? '<button class="table-action" data-reactivate-product="' + product.id + '">Activate</button>' : '<button class="table-action" data-deactivate-product="' + product.id + '">Deactivate</button>';
+      var permanentDelete = ['owner', 'staff'].includes(currentUser.role) ? '<button class="table-action delete-action" data-delete-product="' + product.id + '" title="Permanently delete this product">Permanently delete</button>' : '';
+      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button>' + availabilityAction + permanentDelete + '</div></td></tr>';
     }).join('') + '</tbody></table>' : '<div class="empty">No matching products found.</div>';
     bindProductTableActions(results);
     if (ownerCatalogue.error) more.innerHTML = '<div class="inline-error">' + esc(ownerCatalogue.error) + ' <button class="text-link" id="retry-owner-more">Retry</button></div>';
@@ -1085,6 +1090,7 @@
 
   function bindProductTableActions(root) {
     root.querySelectorAll('[data-edit-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductForm(button.dataset.editProduct); }); });
+    root.querySelectorAll('[data-deactivate-product]').forEach(function (button) { button.addEventListener('click', function () { deactivateProduct(button.dataset.deactivateProduct); }); });
     root.querySelectorAll('[data-delete-product]').forEach(function (button) { button.addEventListener('click', function () { renderProductDelete(button.dataset.deleteProduct); }); });
     root.querySelectorAll('[data-reactivate-product]').forEach(function (button) { button.addEventListener('click', function () { reactivateProduct(button.dataset.reactivateProduct); }); });
   }
@@ -1099,7 +1105,7 @@
 
   function customersPage() {
     var customers = state.users.filter(function (user) { return user.role === 'customer'; });
-    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Customer accounts</h1><p>Create accounts, control access and reset customer passwords.</p></div><button class="primary" id="new-customer">+ Create customer account</button></div><div class="panel table-wrap"><table><thead><tr><th>Customer</th><th>Username</th><th>Orders</th><th>Access</th><th>Action</th></tr></thead><tbody>' + customers.map(function (customer) { return '<tr><td><b>' + esc(customer.name) + '</b></td><td>' + esc(customer.username) + '</td><td>' + Number(ownerOrders.customerCounts[String(customer.id)] || 0) + '</td><td>' + badge(customer.status) + '</td><td><div class="action-row"><button class="table-action" data-toggle-account="' + customer.id + '">' + (customer.status === 'Active' ? 'Disable' : 'Enable') + '</button><button class="table-action" data-reset-account="' + customer.id + '">Reset password</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Access control</p><h1>Customer accounts</h1><p>Create accounts, control access, reset passwords, or permanently delete an exact customer account.</p></div><button class="primary" id="new-customer">+ Create customer account</button></div><div class="panel table-wrap"><table><thead><tr><th>Customer</th><th>Username</th><th>Orders</th><th>Access</th><th>Action</th></tr></thead><tbody>' + customers.map(function (customer) { return '<tr><td><b>' + esc(customer.name) + '</b></td><td>' + esc(customer.username) + '</td><td>' + Number(ownerOrders.customerCounts[String(customer.id)] || 0) + '</td><td>' + badge(customer.status) + '</td><td><div class="action-row"><button class="table-action" data-toggle-account="' + customer.id + '">' + (customer.status === 'Active' ? 'Disable' : 'Enable') + '</button><button class="table-action" data-reset-account="' + customer.id + '">Reset password</button><button class="table-action delete-action" data-delete-customer="' + customer.id + '">Delete account</button></div></td></tr>'; }).join('') + '</tbody></table></div>';
   }
 
   function ownersPage() {
@@ -1126,6 +1132,7 @@
     bindOrderTableActions(document);
     document.querySelectorAll('[data-toggle-account]').forEach(function (button) { button.addEventListener('click', function () { updateAccountAccess(button.dataset.toggleAccount); }); });
     document.querySelectorAll('[data-reset-account]').forEach(function (button) { button.addEventListener('click', function () { renderPasswordResetForm(button.dataset.resetAccount); }); });
+    document.querySelectorAll('[data-delete-customer]').forEach(function (button) { button.addEventListener('click', function () { renderCustomerPermanentDelete(button.dataset.deleteCustomer); }); });
     var newProduct = document.getElementById('new-product'); if (newProduct) newProduct.addEventListener('click', function () { renderProductForm(); });
     var exportProducts = document.getElementById('export-products'); if (exportProducts) exportProducts.addEventListener('click', renderDatabaseProductExport);
     var adjustCategory = document.getElementById('adjust-category'); if (adjustCategory) adjustCategory.addEventListener('click', renderDatabaseCategoryAdjust);
@@ -1176,7 +1183,7 @@
       var category = data.get('category');
       var includeInactive = data.get('activity') === 'all';
       var products = state.products.filter(function (product) {
-        return (includeInactive || !product.deleted) && (category === 'All Categories' || product.category === category);
+        return (includeInactive || !product.inactive) && (category === 'All Categories' || product.category === category);
       }).sort(function (a, b) { return a.name.localeCompare(b.name); });
       var button = document.getElementById('download-product-export');
       var status = document.getElementById('product-export-status');
@@ -1257,6 +1264,10 @@
       ? order.confirmedTotal : order.total;
   }
 
+  function orderItemProduct(item) {
+    return getProduct(item.productId) || { id: item.productId, name: item.productName || 'Deleted product', stock: 0, price: item.unitPrice };
+  }
+
   function voucherViewModel(order, voucher) {
     return {
       accentColor: voucher.accentColor,
@@ -1271,10 +1282,9 @@
       busStation: order.busStation || '',
       deliveryProofRecorded: Boolean(order.deliveryProof),
       items: (order.items || []).map(function (item, index) {
-        var product = getProduct(item.productId);
         return {
           number: index + 1,
-          name: product ? product.name : item.productName,
+          name: item.productName || 'Deleted product',
           quantity: visibleQuantity(order, item),
           unitPrice: visibleUnitPrice(order, item),
           lineTotal: visibleLineTotal(order, item)
@@ -1374,15 +1384,13 @@
     var tabs = '<div class="order-tabs"><button class="order-tab ' + (!showChecklist ? 'active' : '') + '" type="button" data-owner-order-tab="view">View</button><button class="order-tab ' + (showChecklist ? 'active' : '') + '" type="button" data-owner-order-tab="checklist">Check list</button></div>';
     var details = '<div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address || 'Address not recorded') + '</b>' + (order.busStation ? '<small>Bus station: ' + esc(order.busStation) + '</small>' : '') + '</div><div><span>Status</span>' + badge(order.status) + '<small>Order date: ' + order.date + '</small></div></div>';
     var rows = order.items.map(function (item) {
-      var product = getProduct(item.productId);
-      if (!product) return '';
+      var product = orderItemProduct(item);
       if (!showChecklist) return '<tr><td><b>' + esc(product.name) + '</b></td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td><td><span class="pick-mark ' + (item.picked ? '' : 'pick-pending') + '">' + (item.picked ? 'Picked' : 'Not checked') + '</span></td></tr>';
       return '<tr><td><b>' + esc(product.name) + '</b><br><small>Unit price: ' + money(itemPrice(item)) + '</small></td><td><input class="qty-input" name="qty-' + product.id + '" data-checklist-qty="' + product.id + '" data-unit-price="' + itemPrice(item) + '" type="number" min="1" max="' + (product.stock + item.quantity) + '" value="' + item.quantity + '"><br><small>Available: ' + (product.stock + item.quantity) + '</small></td><td><input class="qty-input checklist-price-input" name="price-' + product.id + '" data-checklist-price="' + product.id + '" data-manual-price="' + (item.confirmedPrice !== undefined && item.confirmedPrice !== null ? 'true' : '') + '" type="number" min="0" step="1" value="' + lineTotal(item) + '"></td><td><label class="check-item"><input name="picked-' + product.id + '" type="checkbox" ' + (item.picked ? 'checked' : '') + '> Picked</label></td></tr>';
     }).join('');
     if (showAdjust) {
       var adjustRows = order.items.map(function (item) {
-        var product = getProduct(item.productId);
-        if (!product) return '';
+        var product = orderItemProduct(item);
         var quantityControl = item.picked
           ? '<b>' + item.quantity + '</b><br><small>Picked — locked</small>'
           : '<input class="qty-input" name="qty-' + product.id + '" type="number" min="1" max="' + (product.stock + item.quantity) + '" value="' + item.quantity + '"><br><small>Available: ' + (product.stock + item.quantity) + '</small>';
@@ -1396,7 +1404,7 @@
         var changes = [];
         for (var index = 0; index < order.items.length; index += 1) {
           var item = order.items[index];
-          var product = getProduct(item.productId);
+          var product = orderItemProduct(item);
           var quantity = item.picked ? item.quantity : Number(data.get('qty-' + item.productId));
           if (!item.picked && (!Number.isInteger(quantity) || quantity < 1 || quantity > product.stock + item.quantity)) return toast('Enter a valid available quantity for every unpicked product.');
           changes.push({ item: item, product: product, quantity: quantity, difference: quantity - item.quantity });
@@ -1432,7 +1440,7 @@
       var changes = [];
       for (var index = 0; index < order.items.length; index += 1) {
         var item = order.items[index];
-        var product = getProduct(item.productId);
+        var product = orderItemProduct(item);
         var quantity = Number(data.get('qty-' + item.productId));
         var confirmedPrice = Number(data.get('price-' + item.productId));
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > product.stock + item.quantity) return toast('Enter a valid available quantity for every product.');
@@ -1457,8 +1465,8 @@
     if (!order) return;
     if (voucherAvailable(order)) return toast('Quantities cannot be changed after an order is ready to ship.');
     var rows = order.items.map(function (item) {
-      var product = getProduct(item.productId);
-      return product ? '<tr><td><b>' + esc(product.name) + '</b><br><small>Available including this order: ' + (product.stock + item.quantity) + '</small></td><td><input class="qty-input" name="qty-' + product.id + '" type="number" min="1" max="' + (product.stock + item.quantity) + '" value="' + item.quantity + '"></td></tr>' : '';
+      var product = orderItemProduct(item);
+      return '<tr><td><b>' + esc(product.name) + '</b></td><td><input class="qty-input" name="qty-' + product.id + '" type="number" min="1" value="' + item.quantity + '"></td></tr>';
     }).join('');
     modal('<form id="adjust-order-form"><div class="modal-head"><div><p class="eyebrow">Order #YT-' + order.id + '</p><h2>Adjust confirmed quantity</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">If an item is short, enter the quantity you can provide. The customer sees the new quantity and price in their order details.</p><div class="table-wrap"><table><thead><tr><th>Product</th><th>Confirmed qty</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="two-button"><button class="primary" type="submit">Save quantity changes</button></div></form>');
     document.getElementById('adjust-order-form').addEventListener('submit', function (event) {
@@ -1467,7 +1475,7 @@
       var changes = [];
       for (var index = 0; index < order.items.length; index += 1) {
         var item = order.items[index];
-        var product = getProduct(item.productId);
+        var product = orderItemProduct(item);
         var quantity = Number(data.get('qty-' + item.productId));
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > product.stock + item.quantity) return toast('Enter a valid available quantity for every product.');
         changes.push({ item: item, product: product, quantity: quantity, difference: quantity - item.quantity });
@@ -1659,7 +1667,7 @@
           photoStatus.classList.remove('success', 'error');
           photo = await uploadProductImage(productIdValue, selectedPhotoFile);
         }
-        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: supabaseConfig.canonicalStorageUrl(photo) || null, is_active: product ? !product.deleted : true };
+        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: supabaseConfig.canonicalStorageUrl(photo) || null, is_active: product ? !product.inactive : true };
         var result = product
           ? await supabaseClient.rpc('update_product_with_stock', {
             p_product_id: product.id,
@@ -1686,15 +1694,27 @@
 
   function renderProductDelete(productId) {
     var product = getProduct(productId);
-    if (!product || product.deleted) return;
-    modal('<form id="delete-product-form"><div class="modal-head"><div><p class="eyebrow">Delete product</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">This removes the product from the customer catalogue and Owner Products list. Existing order and inventory history will be kept safely.</p><div class="two-button"><button class="secondary" id="cancel-delete" type="button">Cancel</button><button class="primary" type="submit">Delete product</button></div></form>');
+    if (!product || !['owner', 'staff'].includes(currentUser.role)) return;
+    modal('<form id="delete-product-form"><div class="modal-head"><div><p class="eyebrow">Permanent deletion</p><h2>' + esc(product.name) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="inline-error" role="alert"><b>ဒီလုပ်ဆောင်ချက်ကို ပြန်ပြင်လို့မရပါ။</b> Product ကို catalogue, filters, export နဲ့ carts မှ အပြီးဖယ်ပါမယ်။ Existing orders, vouchers နဲ့ inventory history ကို snapshot ဖြင့်ဆက်ထိန်းပါမယ်။</div><label class="field">အတည်ပြုရန် product name ကိုရိုက်ပါ<input name="confirmation" required autocomplete="off" placeholder="' + esc(product.name) + '"></label><div class="two-button"><button class="secondary" id="cancel-delete" type="button">Cancel</button><button class="danger" type="submit">Permanently delete</button></div></form>');
     document.getElementById('cancel-delete').addEventListener('click', closeModal);
     document.getElementById('delete-product-form').addEventListener('submit', async function (event) {
       event.preventDefault();
-      var result = await supabaseClient.from('products').update({ is_active: false }).eq('id', product.id);
-      if (result.error) return toast(result.error.message);
-      await refreshCataloguePage(product.name + ' was removed from the sales catalogue.');
+      var form = event.currentTarget;
+      if (String(new FormData(form).get('confirmation')).trim() !== product.name) return toast('Product name does not match.');
+      var button = form.querySelector('button[type="submit"]'); button.disabled = true; button.textContent = 'Deleting safely…';
+      try {
+        var result = await deletionService.deleteProduct(product.id);
+        await refreshCataloguePage(result.cleanupWarning || (product.name + ' was permanently removed.'));
+      } catch (error) { button.disabled = false; button.textContent = 'Retry permanent delete'; toast(error.message || 'Product could not be permanently deleted.'); }
     });
+  }
+
+  async function deactivateProduct(productId) {
+    var product = getProduct(productId);
+    if (!product || product.inactive || product.deleted) return;
+    var result = await supabaseClient.from('products').update({ is_active: false }).eq('id', product.id).is('deleted_at', null);
+    if (result.error) return toast(result.error.message || 'The product could not be deactivated.');
+    await refreshCataloguePage(product.name + ' was deactivated and can be activated later.');
   }
 
   function renderDatabaseProductExport() {
@@ -1743,21 +1763,21 @@
 
   async function reactivateProduct(productId) {
     var product = getProduct(productId);
-    if (!product || !product.deleted) return;
-    var result = await supabaseClient.from('products').update({ is_active: true }).eq('id', product.id);
+    if (!product || !product.inactive || product.deleted) return;
+    var result = await supabaseClient.from('products').update({ is_active: true }).eq('id', product.id).is('deleted_at', null);
     if (result.error) return toast(result.error.message || 'The product could not be reactivated.');
     await refreshCataloguePage(product.name + ' is active again.');
   }
 
   function renderCategoryAdjust() {
-    var categories = state.products.filter(function (product) { return !product.deleted; }).map(function (product) { return product.category; }).filter(function (value, index, list) { return list.indexOf(value) === index; }).sort();
+    var categories = state.products.filter(function (product) { return !product.inactive && !product.deleted; }).map(function (product) { return product.category; }).filter(function (value, index, list) { return list.indexOf(value) === index; }).sort();
     modal('<form id="category-form"><div class="modal-head"><div><p class="eyebrow">Pricing tool</p><h2>Adjust category prices</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Increase or reduce every product in one category at the same time.</p><label class="field">Category<select name="category">' + categories.map(function (category) { return '<option value="' + esc(category) + '">' + esc(category) + '</option>'; }).join('') + '</select></label><label class="field">Percentage change<input name="percentage" type="number" min="-100" step="0.01" required placeholder="Example: 10 or -5"></label><p class="photo-help">10 increases by 10%. -5 reduces by 5%. Prices are rounded to the nearest 50 MMK.</p><div class="two-button"><button class="primary" type="submit">Apply price change</button></div></form>');
     document.getElementById('category-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
       var percentage = Number(data.get('percentage'));
       if (!Number.isFinite(percentage)) return toast('Enter a valid percentage.');
-      var changed = state.products.filter(function (product) { return !product.deleted && product.category === data.get('category'); });
+      var changed = state.products.filter(function (product) { return !product.inactive && !product.deleted && product.category === data.get('category'); });
       try {
         await Promise.all(changed.map(function (product) {
           var newPrice = Math.max(0, Math.round(product.price * (1 + percentage / 100) / 50) * 50);
@@ -1854,6 +1874,24 @@
       renderAdminPage();
       toast('Account access updated.');
     } catch (error) { toast(error.message || 'Account access could not be updated.'); }
+  }
+
+  function renderCustomerPermanentDelete(userId) {
+    var account = state.users.find(function (entry) { return String(entry.id) === String(userId) && entry.role === 'customer'; });
+    if (!account) return;
+    modal('<form id="delete-customer-form"><div class="modal-head"><div><p class="eyebrow">Permanent account deletion</p><h2>' + esc(account.username) + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="inline-error" role="alert"><b>ဒီ customer account ကို အပြီးဖျက်မှာပါ။</b> Login/profile/cart ကိုဖယ်ပြီး existing orders, vouchers နဲ့ delivery proofs ကို customer snapshot ဖြင့်ဆက်ထိန်းပါမယ်။ Owner/Staff account ကို ဒီနေရာကဖျက်လို့မရပါ။</div><label class="field">အတည်ပြုရန် username ကိုရိုက်ပါ<input name="confirmation" required autocomplete="off" placeholder="' + esc(account.username) + '"></label><div class="two-button"><button class="secondary" id="cancel-delete-customer" type="button">Cancel</button><button class="danger" type="submit">Permanently delete account</button></div></form>');
+    document.getElementById('cancel-delete-customer').addEventListener('click', closeModal);
+    document.getElementById('delete-customer-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var form = event.currentTarget;
+      if (String(new FormData(form).get('confirmation')).trim() !== account.username) return toast('Username does not match.');
+      var button = form.querySelector('button[type="submit"]'); button.disabled = true; button.textContent = 'Deleting safely…';
+      try {
+        await deletionService.deleteCustomer(account.id);
+        await Promise.all([loadManagedAccounts(), loadOwnerOrders(true)]);
+        closeModal(); renderAdminPage(); toast(account.username + ' was permanently deleted. Historical orders were preserved.');
+      } catch (error) { button.disabled = false; button.textContent = 'Safe retry'; toast(error.message || 'Customer account could not be permanently deleted.'); }
+    });
   }
 
   function renderPasswordResetForm(userId) {

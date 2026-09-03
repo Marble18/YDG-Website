@@ -1,13 +1,14 @@
 (function () {
   'use strict';
 
-  var PRODUCT_COLUMNS = 'id, name, description, price, stock_quantity, unit, minimum_order_quantity, image_url, is_active, category_id, created_at, updated_at, categories(name)';
+  var PRODUCT_COLUMNS = 'id, name, description, price, stock_quantity, unit, minimum_order_quantity, image_url, is_active, category_id, deleted_at, created_at, updated_at, categories(name)';
 
   function escapeLike(value) {
     return String(value || '').trim().replace(/[\\%_]/g, function (character) { return '\\' + character; });
   }
 
   function applyFilters(query, options) {
+    query = query.is('deleted_at', null);
     if (options.visibility === 'active') query = query.eq('is_active', true);
     if (options.visibility === 'inactive') query = query.eq('is_active', false);
     if (options.categoryId) query = query.eq('category_id', options.categoryId);
@@ -50,7 +51,7 @@
       getByIds: async function (ids) {
         var uniqueIds = ids.filter(function (id, index, list) { return id && list.indexOf(id) === index; });
         if (!uniqueIds.length) return [];
-        var result = await client.from('products').select(PRODUCT_COLUMNS).in('id', uniqueIds);
+        var result = await client.from('products').select(PRODUCT_COLUMNS).is('deleted_at', null).in('id', uniqueIds);
         if (result.error) throw result.error;
         return result.data || [];
       }

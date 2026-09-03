@@ -6,3 +6,6 @@ verify_jwt = true
 
 [functions.business-backup]
 verify_jwt = true
+
+[functions.permanent-delete]
+verify_jwt = true

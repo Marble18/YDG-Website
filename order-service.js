@@ -11,7 +11,7 @@
     return {
       listCart: async function () {
         var result = await client.from('cart_items')
-          .select('product_id, quantity, updated_at, products(id,name,price,unit,minimum_order_quantity,image_url,is_active)')
+          .select('product_id, quantity, updated_at, products(id,name,price,unit,minimum_order_quantity,image_url,is_active,deleted_at)')
           .order('created_at', { ascending: true });
         if (result.error) throw result.error;
         return result.data || [];
@@ -34,7 +34,7 @@
       },
       listOrders: async function () {
         var result = await client.from('orders')
-          .select('id,order_number,customer_id,status,delivery_address,bus_station,contact_phone,preferred_delivery_date,subtotal,total,confirmed_subtotal,confirmed_total,customer_note,staff_note,created_at,updated_at,profiles!orders_customer_id_fkey(full_name,username),delivery_proofs(id,object_path,mime_type,file_size,uploaded_at,note),order_items(id,product_id,product_name,unit,unit_price,quantity,line_total,confirmed_quantity,confirmed_unit_price,confirmed_line_total,picked)')
+          .select('id,order_number,customer_id,customer_name_snapshot,customer_username_snapshot,status,delivery_address,bus_station,contact_phone,preferred_delivery_date,subtotal,total,confirmed_subtotal,confirmed_total,customer_note,staff_note,created_at,updated_at,profiles!orders_customer_id_fkey(full_name,username),delivery_proofs(id,object_path,mime_type,file_size,uploaded_at,note),order_items(id,product_id,product_name,unit,unit_price,quantity,line_total,confirmed_quantity,confirmed_unit_price,confirmed_line_total,picked)')
           .order('created_at', { ascending: false });
         if (result.error) throw result.error;
         return result.data || [];

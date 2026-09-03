@@ -134,6 +134,12 @@ First-version decision:
 
 ## 7. Known issues and risks
 
+- PR #20 introduces irreversible user-facing Product/Customer deletion. Product deletion is an internal tombstone rather than a row purge: catalogue/search/filter/export/cart/checkout exclude `deleted_at` rows, carts are cleared atomically, the category link is detached, and order/inventory names remain immutable snapshots. The final business decision permits active owners and active staff to invoke it; Deactivate/Activate remains a separate reversible workflow.
+- Product image cleanup is deliberately outside the PostgreSQL transaction. The protected Edge Function removes only the validated exact `product-images` path after the tombstone commits, records removed/failed status, and supports an idempotent retry without restoring the product or broadly deleting Storage objects.
+- Customer deletion is active owner/staff only and targets customer roles only. The Edge Function bans Auth first, then a database transaction snapshots customer display fields on orders, clears cart rows, detaches order ownership, removes the profile, and finally deletes the exact Auth user. If Auth deletion fails, login remains disabled and the request remains safely retryable. Owner/staff/self targets are denied server-side.
+- Historical orders, order items, vouchers, inventory movements and delivery proofs survive deletion. Order/voucher names use stored snapshots rather than mutable current product/profile rows. Old backups cannot revive a deleted customer or overwrite a tombstone; the business backup schema version is `202609020001`.
+- PR #20 migration and RPC deployment do not delete existing live Product/Customer records. Manual destructive tests require exact test IDs/counts and explicit owner confirmation.
+
 - Supabase built-in email may return `EMAIL RATE LIMIT EXCEEDED`; production recovery needs custom SMTP.
 - Managed-account migration `202608050001` and Edge Functions `username-login` / `account-admin` were deployed to the linked Supabase project on 2026-08-05. Owner username login, customer creation/login, owner-managed password reset, old-password denial, disable denial and re-enable login were manually validated against the deploy preview.
 - Voucher and maintenance settings moved to Supabase in PR #16; cart and orders were retired as Local Storage sources of truth by PR #10. PR #17 also retires browser backup/restore.
@@ -178,6 +184,8 @@ First-version decision:
 - Deployment: Netlify live URL, Supabase allowed redirects and no repository secrets
 
 ## 11. Change log
+
+- 2026-09-02: Started PR #20 on `codex/pr20-safe-permanent-deletion`. Added owner-only Product tombstoning with exact-path image cleanup, active owner/staff Customer deletion with disable-first distributed compensation, immutable order/inventory snapshots, cart/checkout/catalogue/export exclusion, retry/audit records, and backup anti-resurrection rules. Migrations passed linked dry-run/lint and were applied without deleting live business records; destructive manual test cases remain blocked pending explicit IDs/counts and confirmation.
 
 - 2026-08-04: Initial static prototype imported.
 - 2026-08-04: Secure Supabase owner authentication merged in PR #1.
