@@ -11,16 +11,16 @@
     return {
       listCart: async function () {
         var result = await client.from('cart_items')
-          .select('product_id, quantity, updated_at, products(id,name,price,unit,minimum_order_quantity,image_url,is_active,deleted_at)')
+          .select('product_id, selected_unit, quantity, updated_at, products(id,name,price,unit,minimum_order_quantity,sales_mode,pcs_price,box_price,pieces_per_box,minimum_pcs_quantity,minimum_box_quantity,image_url,is_active,deleted_at)')
           .order('created_at', { ascending: true });
         if (result.error) throw result.error;
         return result.data || [];
       },
-      setCartItem: function (productId, quantity) {
-        return rpc('set_cart_item', { p_product_id: productId, p_quantity: quantity });
+      setCartItem: function (productId, selectedUnit, quantity) {
+        return rpc('set_cart_item', { p_product_id: productId, p_selected_unit: selectedUnit, p_quantity: quantity });
       },
-      removeCartItem: function (productId) {
-        return rpc('remove_cart_item', { p_product_id: productId });
+      removeCartItem: function (productId, selectedUnit) {
+        return rpc('remove_cart_item', { p_product_id: productId, p_selected_unit: selectedUnit });
       },
       checkout: function (details) {
         return rpc('checkout_cart', {
@@ -34,7 +34,7 @@
       },
       listOrders: async function () {
         var result = await client.from('orders')
-          .select('id,order_number,customer_id,customer_name_snapshot,customer_username_snapshot,status,delivery_address,bus_station,contact_phone,preferred_delivery_date,subtotal,total,confirmed_subtotal,confirmed_total,customer_note,staff_note,created_at,updated_at,profiles!orders_customer_id_fkey(full_name,username),delivery_proofs(id,object_path,mime_type,file_size,uploaded_at,note),order_items(id,product_id,product_name,unit,unit_price,quantity,line_total,confirmed_quantity,confirmed_unit_price,confirmed_line_total,picked)')
+          .select('id,order_number,customer_id,customer_name_snapshot,customer_username_snapshot,status,delivery_address,bus_station,contact_phone,preferred_delivery_date,subtotal,total,confirmed_subtotal,confirmed_total,customer_note,staff_note,created_at,updated_at,profiles!orders_customer_id_fkey(full_name,username),delivery_proofs(id,object_path,mime_type,file_size,uploaded_at,note),order_items(id,product_id,product_name,unit,unit_price,quantity,line_total,pieces_per_box_snapshot,equivalent_requested_pcs,confirmed_unit,confirmed_quantity,confirmed_unit_price,confirmed_line_total,equivalent_confirmed_pcs,picked)')
           .order('created_at', { ascending: false });
         if (result.error) throw result.error;
         return result.data || [];

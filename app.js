@@ -243,7 +243,7 @@
     remoteCart = usableRows.map(function (row) {
       var product = mapDatabaseProduct(Object.assign({}, row.products, { categories: null, category_id: null, stock_quantity: 0 }));
       mergeProductCache([product]);
-      return { productId: row.product_id, quantity: Number(row.quantity) };
+      return { productId: row.product_id, selectedUnit: row.selected_unit === 'box' ? 'box' : 'pcs', quantity: Number(row.quantity) };
     });
     if (rows.length > usableRows.length) toast('A removed or unavailable product was cleared from your cart.');
   }
@@ -261,7 +261,8 @@
         var product = products.find(function (entry) { return String(entry.id) === String(item && item.productId); });
         var quantity = Number(item && item.quantity);
         if (product && !product.deleted && !product.inactive && Number.isInteger(quantity) && quantity >= product.minimumOrderQuantity) {
-          await orderService.setCartItem(product.id, quantity);
+          var legacyUnit = item.selectedUnit === 'box' && productAllowsUnit(product, 'box') ? 'box' : productDefaultUnit(product);
+          if (quantity >= productMinimum(product, legacyUnit)) await orderService.setCartItem(product.id, legacyUnit, quantity);
         }
       }
     }
@@ -290,6 +291,8 @@
       items: (row.order_items || []).map(function (item) { return {
         id: item.id, productId: item.product_id, productName: item.product_name, unit: item.unit,
         unitPrice: Number(item.unit_price), quantity: Number(item.quantity), lineTotal: Number(item.line_total),
+        piecesPerBox: nullableNumber(item.pieces_per_box_snapshot), equivalentRequestedPcs: nullableNumber(item.equivalent_requested_pcs),
+        confirmedUnit: item.confirmed_unit || item.unit, equivalentConfirmedPcs: nullableNumber(item.equivalent_confirmed_pcs),
         confirmedQuantity: nullableNumber(item.confirmed_quantity), confirmedUnitPrice: nullableNumber(item.confirmed_unit_price),
         confirmedLineTotal: nullableNumber(item.confirmed_line_total),
         confirmedPrice: nullableNumber(item.confirmed_line_total), picked: Boolean(item.picked)
@@ -386,6 +389,8 @@
   }
 
   function mapDatabaseProduct(row) {
+    var legacyUnit = row.unit === 'box' ? 'box' : 'pcs';
+    var salesMode = row.sales_mode || (legacyUnit === 'box' ? 'box_only' : 'pcs_only');
     return {
       id: row.id,
       name: row.name,
@@ -395,12 +400,45 @@
       stock: Number(row.stock_quantity),
       unit: row.unit === 'box' ? 'box' : 'pcs',
       minimumOrderQuantity: Number(row.minimum_order_quantity) || 1,
+      salesMode: salesMode,
+      pcsPrice: nullableNumber(row.pcs_price !== undefined ? row.pcs_price : (legacyUnit === 'pcs' ? row.price : null)),
+      boxPrice: nullableNumber(row.box_price !== undefined ? row.box_price : (legacyUnit === 'box' ? row.price : null)),
+      piecesPerBox: nullableNumber(row.pieces_per_box),
+      minimumPcsQuantity: nullableNumber(row.minimum_pcs_quantity !== undefined ? row.minimum_pcs_quantity : (legacyUnit === 'pcs' ? row.minimum_order_quantity : null)),
+      minimumBoxQuantity: nullableNumber(row.minimum_box_quantity !== undefined ? row.minimum_box_quantity : (legacyUnit === 'box' ? row.minimum_order_quantity : null)),
       photo: supabaseConfig.runtimeStorageUrl(row.image_url || ''),
       updatedAt: row.updated_at || null,
       bg: '#FCEAF0',
       inactive: !row.is_active,
       deleted: Boolean(row.deleted_at)
     };
+  }
+
+  function productAllowsUnit(product, unit) {
+    return unit === 'box' ? ['box_only', 'pcs_and_box'].includes(product.salesMode) : ['pcs_only', 'pcs_and_box'].includes(product.salesMode);
+  }
+
+  function productDefaultUnit(product) {
+    return product.salesMode === 'box_only' ? 'box' : 'pcs';
+  }
+
+  function productPrice(product, unit) {
+    return Number(unit === 'box' ? product.boxPrice : product.pcsPrice);
+  }
+
+  function productMinimum(product, unit) {
+    return Number(unit === 'box' ? product.minimumBoxQuantity : product.minimumPcsQuantity) || 1;
+  }
+
+  function unitLabel(unit, quantity) {
+    return unit === 'box' ? (Number(quantity) === 1 ? 'box' : 'boxes') : 'pcs';
+  }
+
+  function productSalesSummary(product) {
+    var lines = [];
+    if (productAllowsUnit(product, 'pcs')) lines.push(money(product.pcsPrice) + ' / pcs · min ' + product.minimumPcsQuantity);
+    if (productAllowsUnit(product, 'box')) lines.push(money(product.boxPrice) + ' / box · ' + product.piecesPerBox + ' pcs · min ' + product.minimumBoxQuantity);
+    return lines.join('<br>');
   }
 
   async function loadCatalogueData() {
@@ -648,21 +686,42 @@
     grid.innerHTML = products.length ? products.map(function (product) {
       var hasPhoto = /^(data:image\/|https:\/\/)/.test(String(product.photo || ''));
       var photo = hasPhoto ? '<button class="product-photo photo-preview-button" data-preview-photo="' + product.id + '" aria-label="Preview ' + esc(product.name) + '" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</button>' : '<div class="product-photo" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</div>';
-      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + '</span><span class="unit-chip">' + esc(product.unit) + '</span></div><span class="minimum-order">Minimum ' + product.minimumOrderQuantity + ' ' + esc(product.unit) + '</span><div class="card-footer"><div class="quantity-stepper" aria-label="Quantity for ' + esc(product.name) + '"><button type="button" data-quantity-change="-1" data-quantity-target="qty-' + product.id + '" aria-label="Decrease quantity">−</button><input class="qty-input" aria-label="Quantity" id="qty-' + product.id + '" type="number" min="' + product.minimumOrderQuantity + '" step="1" value="' + product.minimumOrderQuantity + '"><button type="button" data-quantity-change="1" data-quantity-target="qty-' + product.id + '" aria-label="Increase quantity">+</button></div><button class="primary add-to-cart" data-product="' + product.id + '">Add to cart</button></div></div></article>';
+      var defaultUnit = productDefaultUnit(product);
+      var minimum = productMinimum(product, defaultUnit);
+      var choices = ['pcs', 'box'].filter(function (unit) { return productAllowsUnit(product, unit); }).map(function (unit) {
+        return '<button type="button" class="unit-choice ' + (unit === defaultUnit ? 'active' : '') + '" data-product-unit="' + product.id + '" data-unit="' + unit + '" aria-pressed="' + (unit === defaultUnit) + '">' + unitLabel(unit, 1) + '</button>';
+      }).join('');
+      return '<article class="product-card" id="product-card-' + product.id + '" data-selected-unit="' + defaultUnit + '">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="customer-unit-picker" aria-label="Choose sales unit">' + choices + '</div><div class="product-meta"><span class="price" data-card-price>' + money(productPrice(product, defaultUnit)) + '</span><span class="unit-chip" data-card-unit>' + defaultUnit + '</span></div><span class="minimum-order" data-card-minimum>Minimum ' + minimum + ' ' + unitLabel(defaultUnit, minimum) + '</span><span class="box-equivalent" data-card-equivalent ' + (defaultUnit === 'box' ? '' : 'hidden') + '>' + (defaultUnit === 'box' ? product.piecesPerBox + ' pcs per box' : '') + '</span><div class="card-order-total" data-card-total>' + minimum + ' × ' + money(productPrice(product, defaultUnit)) + ' = ' + money(minimum * productPrice(product, defaultUnit)) + '</div><div class="card-footer"><div class="quantity-stepper" aria-label="Quantity for ' + esc(product.name) + '"><button type="button" data-quantity-change="-1" data-quantity-target="qty-' + product.id + '" aria-label="Decrease quantity">−</button><input class="qty-input" aria-label="Quantity" id="qty-' + product.id + '" type="number" min="' + minimum + '" step="1" value="' + minimum + '" data-product-quantity="' + product.id + '"><button type="button" data-quantity-change="1" data-quantity-target="qty-' + product.id + '" aria-label="Increase quantity">+</button></div><button class="primary add-to-cart" data-product="' + product.id + '">Add to cart</button></div></div></article>';
     }).join('') : '<div class="empty">No matching products found.</div>';
+    function refreshCard(productId, selectedUnit, resetQuantity) {
+      var product = getProduct(productId); var card = document.getElementById('product-card-' + productId); var input = document.getElementById('qty-' + productId);
+      if (!product || !card || !input) return;
+      var minimum = productMinimum(product, selectedUnit); card.dataset.selectedUnit = selectedUnit;
+      input.min = minimum; if (resetQuantity || Number(input.value) < minimum) input.value = minimum;
+      card.querySelector('[data-card-price]').textContent = money(productPrice(product, selectedUnit));
+      card.querySelector('[data-card-unit]').textContent = selectedUnit;
+      card.querySelector('[data-card-minimum]').textContent = 'Minimum ' + minimum + ' ' + unitLabel(selectedUnit, minimum);
+      var equivalent = card.querySelector('[data-card-equivalent]'); equivalent.hidden = selectedUnit !== 'box'; equivalent.textContent = selectedUnit === 'box' ? product.piecesPerBox + ' pcs per box' : '';
+      card.querySelectorAll('[data-product-unit]').forEach(function (button) { var active = button.dataset.unit === selectedUnit; button.classList.toggle('active', active); button.setAttribute('aria-pressed', active ? 'true' : 'false'); });
+      card.querySelector('[data-card-total]').textContent = Number(input.value) + ' × ' + money(productPrice(product, selectedUnit)) + ' = ' + money(Number(input.value) * productPrice(product, selectedUnit));
+    }
+    document.querySelectorAll('[data-product-unit]').forEach(function (button) { button.addEventListener('click', function () { refreshCard(button.dataset.productUnit, button.dataset.unit, true); }); });
     document.querySelectorAll('[data-quantity-change]').forEach(function (button) {
       button.addEventListener('click', function () {
         var input = document.getElementById(button.dataset.quantityTarget);
         var minimum = Number(input.min) || 1;
         input.value = Math.max(minimum, (Number(input.value) || minimum) + Number(button.dataset.quantityChange));
+        var card = input.closest('.product-card'); if (card) refreshCard(card.id.replace('product-card-', ''), card.dataset.selectedUnit, false);
       });
     });
+    document.querySelectorAll('[data-product-quantity]').forEach(function (input) { input.addEventListener('input', function () { var card = input.closest('.product-card'); if (card) refreshCard(input.dataset.productQuantity, card.dataset.selectedUnit, false); }); });
     document.querySelectorAll('[data-product]').forEach(function (button) {
       button.addEventListener('click', async function () {
         var original = button.textContent;
         button.disabled = true;
         button.textContent = 'Adding…';
-        await addToCart(button.dataset.product, Number(document.getElementById('qty-' + button.dataset.product).value || 1));
+        var card = document.getElementById('product-card-' + button.dataset.product);
+        await addToCart(button.dataset.product, card.dataset.selectedUnit, Number(document.getElementById('qty-' + button.dataset.product).value || 1));
         if (button.isConnected) { button.disabled = false; button.textContent = original; }
       });
     });
@@ -731,14 +790,15 @@
     document.querySelectorAll('[data-menu-order-voucher]').forEach(function (button) { button.addEventListener('click', function () { renderVoucher(button.dataset.menuOrderVoucher); }); });
   }
 
-  async function addToCart(productId, quantity) {
+  async function addToCart(productId, selectedUnit, quantity) {
     var product = getProduct(productId);
     if (!product) return;
     quantity = Number(quantity);
-    if (!Number.isInteger(quantity) || quantity < product.minimumOrderQuantity) return toast('Enter at least the minimum whole-number quantity.');
-    var existing = cart().find(function (item) { return String(item.productId) === String(productId); });
+    if (!productAllowsUnit(product, selectedUnit)) return toast('This sales unit is unavailable.');
+    if (!Number.isInteger(quantity) || quantity < productMinimum(product, selectedUnit)) return toast('Enter at least the minimum whole-number quantity.');
+    var existing = cart().find(function (item) { return String(item.productId) === String(productId) && item.selectedUnit === selectedUnit; });
     try {
-      await orderService.setCartItem(productId, (existing ? existing.quantity : 0) + quantity);
+      await orderService.setCartItem(productId, selectedUnit, (existing ? existing.quantity : 0) + quantity);
       await loadRemoteCart();
       updateCartCountBadges();
       toast(product.name + ' added to cart.');
@@ -746,7 +806,7 @@
   }
 
   function cartLines() {
-    return cart().map(function (line) { return { product: getProduct(line.productId), quantity: line.quantity }; }).filter(function (line) { return line.product; });
+    return cart().map(function (line) { return { product: getProduct(line.productId), selectedUnit: line.selectedUnit, quantity: line.quantity }; }).filter(function (line) { return line.product; });
   }
 
   async function ensureCachedProducts(ids) {
@@ -764,19 +824,19 @@
       toast(error.message || 'Cart products could not be refreshed.');
     }
     var items = cartLines();
-    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(line.product.price) + ' / ' + esc(line.product.unit) + ' · minimum ' + line.product.minimumOrderQuantity + '</span></div><input type="number" min="' + line.product.minimumOrderQuantity + '" step="1" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '"><div><button class="remove" data-remove-cart="' + line.product.id + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
+    modal('<div class="modal-head"><div><p class="eyebrow">Your order</p><h2>Shopping cart</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (items.length ? '<div>' + items.map(function (line) { var minimum = productMinimum(line.product, line.selectedUnit); var equivalent = line.selectedUnit === 'box' ? '<small>' + (line.quantity * line.product.piecesPerBox) + ' pcs equivalent</small>' : ''; return '<div class="cart-line"><div><b>' + esc(line.product.name) + '</b><span>' + money(productPrice(line.product, line.selectedUnit)) + ' / ' + unitLabel(line.selectedUnit, 1) + ' · minimum ' + minimum + '</span>' + equivalent + '</div><input type="number" min="' + minimum + '" step="1" value="' + line.quantity + '" data-cart-quantity="' + line.product.id + '" data-cart-unit="' + line.selectedUnit + '"><div><button class="remove" data-remove-cart="' + line.product.id + '" data-remove-unit="' + line.selectedUnit + '">Remove</button></div></div>'; }).join('') + '</div><button class="primary full" id="checkout">Place order</button>' : '<div class="cart-empty">Your cart is empty.</div>'));
     document.querySelectorAll('[data-cart-quantity]').forEach(function (input) {
       input.addEventListener('change', async function () {
-        var item = cart().find(function (entry) { return String(entry.productId) === input.dataset.cartQuantity; });
+        var item = cart().find(function (entry) { return String(entry.productId) === input.dataset.cartQuantity && entry.selectedUnit === input.dataset.cartUnit; });
         var product = item ? getProduct(item.productId) : null;
         var quantity = Number(input.value);
         if (!product) return toast('This product is no longer available and will be removed from your cart.');
-        if (!Number.isInteger(quantity) || quantity < product.minimumOrderQuantity) return toast('Quantity is below the product minimum.');
-        try { await orderService.setCartItem(item.productId, quantity); await renderCart(); updateCartCountBadges(); } catch (error) { toast(error.message || 'Cart could not be updated.'); }
+        if (!Number.isInteger(quantity) || quantity < productMinimum(product, item.selectedUnit)) return toast('Quantity is below the product minimum.');
+        try { await orderService.setCartItem(item.productId, item.selectedUnit, quantity); await renderCart(); updateCartCountBadges(); } catch (error) { toast(error.message || 'Cart could not be updated.'); }
       });
     });
     document.querySelectorAll('[data-remove-cart]').forEach(function (button) {
-      button.addEventListener('click', async function () { try { await orderService.removeCartItem(button.dataset.removeCart); await renderCart(); updateCartCountBadges(); } catch (error) { toast(error.message || 'Item could not be removed.'); } });
+      button.addEventListener('click', async function () { try { await orderService.removeCartItem(button.dataset.removeCart, button.dataset.removeUnit); await renderCart(); updateCartCountBadges(); } catch (error) { toast(error.message || 'Item could not be removed.'); } });
     });
     var checkout = document.getElementById('checkout');
     if (checkout) checkout.addEventListener('click', renderCheckout);
@@ -835,10 +895,10 @@
     if (!order || (!['owner', 'staff'].includes(currentUser.role) && order.customerId !== currentUser.id)) return;
     var isCustomer = currentUser.role === 'customer';
     var quantityNotices = order.items.filter(function (item) { return item.confirmedQuantity !== item.quantity; }).map(function (item) {
-      return '<div>Shop adjusted quantity from ' + item.quantity + ' to ' + item.confirmedQuantity + ' for ' + esc(item.productName) + '.</div>';
+      return '<div>Shop adjusted quantity from ' + item.quantity + ' to ' + item.confirmedQuantity + ' ' + unitLabel(item.unit, item.confirmedQuantity) + ' for ' + esc(item.productName) + '.</div>';
     }).join('');
     var rows = order.items.map(function (item) {
-      return '<tr><td>' + esc(item.productName || 'Deleted product') + '</td><td>' + visibleQuantity(order, item) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
+      return '<tr><td>' + esc(item.productName || 'Deleted product') + '<br><small>' + esc(itemUnitDetail(order, item)) + '</small></td><td>' + visibleQuantity(order, item) + ' ' + esc(unitLabel(visibleUnit(order, item), visibleQuantity(order, item))) + '</td><td>' + money(visibleUnitPrice(order, item)) + '</td><td>' + money(visibleLineTotal(order, item)) + '</td></tr>';
     }).join('');
     modal('<div class="modal-head"><div><p class="eyebrow">Order details</p><h2>' + esc(order.orderNumber || 'Order') + '</h2></div><button class="icon-btn" id="close-modal">×</button></div>' + (isCustomer && quantityNotices ? '<div class="order-alert">' + quantityNotices + '</div>' : '') + '<p class="subtext"><b>Status:</b> ' + badge(order.status) + (order.note ? '<br><b>Note:</b> ' + esc(order.note) : '') + '</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>' + (usesConfirmedValues(order) ? 'Confirmed qty' : 'Requested qty') + '</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>' + (usesConfirmedValues(order) ? 'Confirmed total' : 'Original order total') + '</span><b>' + money(visibleOrderTotal(order)) + '</b></div>' + deliveryProofPanel(order, !isCustomer) + (voucherAvailable(order) ? '<div class="two-button"><button class="primary" id="view-voucher">View / print voucher</button></div>' : ''));
     bindDeliveryProofActions(order);
@@ -964,7 +1024,7 @@
 
   function productsPage() {
     var categoryOptions = state.categories.map(function (category) { return '<option value="' + category.id + '" ' + (String(ownerCatalogue.categoryId) === String(category.id) ? 'selected' : '') + '>' + esc(category.name) + '</option>'; }).join('');
-    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Search and manage the catalogue without loading every product at once.</p></div><div class="action-row"><button class="secondary" id="pcs-box-prototype">Pcs/Box UI prototype</button><button class="secondary" id="export-products">Export products</button><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><section class="panel catalogue-toolbar"><label class="field">Search products<input id="owner-product-search" value="' + esc(ownerCatalogue.search) + '" placeholder="Product name..." autocomplete="off"></label><label class="field">Category<select id="owner-product-category"><option value="">All Categories</option>' + categoryOptions + '</select></label><label class="field">Status<select id="owner-product-status"><option value="all" ' + (ownerCatalogue.visibility === 'all' ? 'selected' : '') + '>Active and inactive</option><option value="active" ' + (ownerCatalogue.visibility === 'active' ? 'selected' : '') + '>Active only</option><option value="inactive" ' + (ownerCatalogue.visibility === 'inactive' ? 'selected' : '') + '>Inactive only</option></select></label></section><div class="catalogue-result-heading"><span id="owner-product-count" aria-live="polite"></span></div><div class="panel table-wrap" id="owner-product-results" aria-busy="true"></div><div class="catalogue-more" id="owner-product-more"></div>';
+    return '<div class="page-heading"><div><p class="eyebrow">Catalogue</p><h1>Products</h1><p>Search and manage the catalogue without loading every product at once.</p></div><div class="action-row"><button class="secondary" id="export-products">Export products</button><button class="secondary" id="adjust-category">Adjust category prices</button><button class="primary" id="new-product">+ Add product</button></div></div><section class="panel catalogue-toolbar"><label class="field">Search products<input id="owner-product-search" value="' + esc(ownerCatalogue.search) + '" placeholder="Product name..." autocomplete="off"></label><label class="field">Category<select id="owner-product-category"><option value="">All Categories</option>' + categoryOptions + '</select></label><label class="field">Status<select id="owner-product-status"><option value="all" ' + (ownerCatalogue.visibility === 'all' ? 'selected' : '') + '>Active and inactive</option><option value="active" ' + (ownerCatalogue.visibility === 'active' ? 'selected' : '') + '>Active only</option><option value="inactive" ' + (ownerCatalogue.visibility === 'inactive' ? 'selected' : '') + '>Inactive only</option></select></label></section><div class="catalogue-result-heading"><span id="owner-product-count" aria-live="polite"></span></div><div class="panel table-wrap" id="owner-product-results" aria-busy="true"></div><div class="catalogue-more" id="owner-product-more"></div>';
   }
 
   function categoriesPage() {
@@ -1101,7 +1161,7 @@
       var status = product.inactive ? '<span class="badge disabled">Inactive</span>' : '<span class="badge active">Active</span>';
       var availabilityAction = product.inactive ? '<button class="table-action" data-reactivate-product="' + product.id + '">Activate</button>' : '<button class="table-action" data-deactivate-product="' + product.id + '">Deactivate</button>';
       var permanentDelete = ['owner', 'staff'].includes(currentUser.role) ? '<button class="table-action delete-action" data-delete-product="' + product.id + '" title="Permanently delete this product">Permanently delete</button>' : '';
-      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td>' + money(product.price) + '</td><td><b>' + esc(product.unit) + '</b><br><small>Minimum ' + product.minimumOrderQuantity + '</small></td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + '</b></td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button>' + availabilityAction + permanentDelete + '</div></td></tr>';
+      return '<tr><td><div class="product-cell">' + photoMarkup(product, 'table-photo') + '<b>' + esc(product.name) + '</b></div></td><td>' + esc(product.category) + '</td><td colspan="2">' + productSalesSummary(product) + '</td><td><b class="' + (product.stock < 10 ? 'low' : '') + '">' + product.stock + ' pcs</b>' + (product.piecesPerBox ? '<br><small>' + Math.floor(product.stock / product.piecesPerBox) + ' box(es) + ' + (product.stock % product.piecesPerBox) + ' pcs</small>' : '') + '</td><td>' + status + '</td><td><div class="action-row"><button class="table-action" data-edit-product="' + product.id + '">Edit</button>' + availabilityAction + permanentDelete + '</div></td></tr>';
     }).join('') + '</tbody></table>' : '<div class="empty">No matching products found.</div>';
     bindProductTableActions(results);
     if (ownerCatalogue.error) more.innerHTML = '<div class="inline-error">' + esc(ownerCatalogue.error) + ' <button class="text-link" id="retry-owner-more">Retry</button></div>';
@@ -1157,7 +1217,6 @@
     document.querySelectorAll('[data-reset-account]').forEach(function (button) { button.addEventListener('click', function () { renderPasswordResetForm(button.dataset.resetAccount); }); });
     document.querySelectorAll('[data-delete-customer]').forEach(function (button) { button.addEventListener('click', function () { renderCustomerPermanentDelete(button.dataset.deleteCustomer); }); });
     var newProduct = document.getElementById('new-product'); if (newProduct) newProduct.addEventListener('click', function () { renderProductForm(); });
-    var pcsBoxPrototype = document.getElementById('pcs-box-prototype'); if (pcsBoxPrototype) pcsBoxPrototype.addEventListener('click', renderPcsBoxPrototype);
     var exportProducts = document.getElementById('export-products'); if (exportProducts) exportProducts.addEventListener('click', renderDatabaseProductExport);
     var adjustCategory = document.getElementById('adjust-category'); if (adjustCategory) adjustCategory.addEventListener('click', renderDatabaseCategoryAdjust);
     var newStock = document.getElementById('new-stock'); if (newStock) newStock.addEventListener('click', renderStockForm);
@@ -1243,7 +1302,7 @@
     var order = state.orders.find(function (entry) { return entry.id === orderId; });
     if (!order) return;
     var rows = order.items.map(function (item) {
-      return '<tr><td><b>' + esc(item.productName) + '</b><br><small>Requested at ' + money(item.unitPrice) + ' / ' + esc(item.unit) + '</small></td><td>' + item.quantity + '</td><td><input class="qty-input" type="number" min="1" step="1" value="' + item.confirmedQuantity + '" data-confirmed-quantity="' + item.id + '"></td><td><input class="checklist-price-input" type="number" min="0" step="1" value="' + item.confirmedUnitPrice + '" data-confirmed-unit-price="' + item.id + '"></td></tr>';
+      return '<tr><td><b>' + esc(item.productName) + '</b><br><small>Requested at ' + money(item.unitPrice) + ' / ' + esc(unitLabel(item.unit, 1)) + (item.unit === 'box' && item.piecesPerBox ? ' · ' + item.piecesPerBox + ' pcs/box' : '') + '</small></td><td>' + item.quantity + ' ' + esc(unitLabel(item.unit, item.quantity)) + '<br><small>' + item.equivalentRequestedPcs + ' pcs equivalent</small></td><td><input class="qty-input" type="number" min="1" step="1" value="' + item.confirmedQuantity + '" data-confirmed-quantity="' + item.id + '"><small>Unit locked: ' + esc(unitLabel(item.unit, 1)) + '</small></td><td><input class="checklist-price-input" type="number" min="0" step="1" value="' + item.confirmedUnitPrice + '" data-confirmed-unit-price="' + item.id + '"></td></tr>';
     }).join('');
     modal('<div class="modal-head"><div><p class="eyebrow">' + esc(order.orderNumber || order.id) + '</p><h2>Order confirmation</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="order-view-summary"><div><span>Customer</span><b>' + esc(order.customer) + '</b><small>' + esc(order.phone || 'Phone not recorded') + '</small></div><div><span>Delivery</span><b>' + esc(order.address) + '</b></div><div><span>Status</span>' + badge(order.status) + '<small>' + order.date + '</small></div></div><p class="subtext">Requested quantity and price remain unchanged for audit. Confirmed values become payable when status reaches Ready to Ship. Only quantity differences create a customer adjustment notice.</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Requested qty</th><th>Confirmed qty</th><th>Confirmed unit price</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total"><span>Original total</span><b>' + money(order.total) + '</b></div><div class="cart-total"><span>Confirmed total</span><b>' + money(order.confirmedTotal) + '</b></div><button class="primary full" id="save-confirmation">Save confirmation</button>');
     document.getElementById('save-confirmation').addEventListener('click', async function (event) {
@@ -1271,6 +1330,17 @@
   function visibleQuantity(order, item) {
     return usesConfirmedValues(order) && item.confirmedQuantity !== null && item.confirmedQuantity !== undefined
       ? item.confirmedQuantity : item.quantity;
+  }
+
+  function visibleUnit(order, item) {
+    return usesConfirmedValues(order) ? (item.confirmedUnit || item.unit) : item.unit;
+  }
+
+  function itemUnitDetail(order, item) {
+    var unit = visibleUnit(order, item);
+    if (unit !== 'box') return unitLabel(unit, visibleQuantity(order, item));
+    var equivalent = usesConfirmedValues(order) ? item.equivalentConfirmedPcs : item.equivalentRequestedPcs;
+    return unitLabel(unit, visibleQuantity(order, item)) + (item.piecesPerBox ? ' · ' + item.piecesPerBox + ' pcs/box · ' + equivalent + ' pcs total' : '');
   }
 
   function visibleUnitPrice(order, item) {
@@ -1310,6 +1380,8 @@
           number: index + 1,
           name: item.productName || 'Deleted product',
           quantity: visibleQuantity(order, item),
+          unit: visibleUnit(order, item),
+          unitDetail: itemUnitDetail(order, item),
           unitPrice: visibleUnitPrice(order, item),
           lineTotal: visibleLineTotal(order, item)
         };
@@ -1320,7 +1392,7 @@
 
   function voucherMarkup(model, extraClass) {
     var rows = model.items.map(function (item) {
-      return '<tr><td class="voucher-number">' + item.number + '</td><td class="voucher-item-name">' + esc(item.name) + '</td><td class="voucher-number-cell">' + item.quantity + '</td><td class="voucher-money">' + money(item.unitPrice) + '</td><td class="voucher-money">' + money(item.lineTotal) + '</td></tr>';
+      return '<tr><td class="voucher-number">' + item.number + '</td><td class="voucher-item-name">' + esc(item.name) + '</td><td class="voucher-number-cell">' + item.quantity + '<small>' + esc(item.unitDetail) + '</small></td><td class="voucher-money">' + money(item.unitPrice) + '</td><td class="voucher-money">' + money(item.lineTotal) + '</td></tr>';
     }).join('');
     return '<section class="voucher' + (extraClass ? ' ' + extraClass : '') + '" style="--voucher-accent:' + esc(model.accentColor) + '"><div class="voucher-top"><div class="voucher-branding"><img class="voucher-logo" src="assets/brand/ydg-logo.webp" alt="Yadanar Theingi logo"><div class="voucher-brand-copy"><div class="voucher-brand">Yadanar Theingi</div><div class="voucher-shop">Stationery &amp; Fancy</div></div></div><div class="voucher-order"><b>' + esc(model.title) + '</b><span>' + esc(model.orderNumber) + '</span></div></div><div class="voucher-details"><div class="voucher-customer"><span>Customer</span><b>' + esc(model.customer) + '</b><small>' + esc(model.phone) + '</small></div><div class="voucher-delivery"><div><span>Order Date</span><b>' + esc(model.orderDate) + '</b>' + (model.deliveryDate ? '<small>Delivery date: ' + esc(model.deliveryDate) + '</small>' : '') + '</div><div><span>Delivery Address</span><b>' + esc(model.address) + '</b>' + (model.busStation ? '<small>Bus station: ' + esc(model.busStation) + '</small>' : '') + '</div></div></div><div class="table-wrap voucher-table-wrap"><table class="voucher-table"><colgroup><col class="voucher-col-number"><col class="voucher-col-item"><col class="voucher-col-qty"><col class="voucher-col-price"><col class="voucher-col-total"></colgroup><thead><tr><th>No</th><th>Item</th><th>Qty</th><th>Unit Price</th><th>Line Total</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="cart-total voucher-total"><span>Order Total Amount</span><b>' + money(model.total) + '</b></div>' + (model.deliveryProofRecorded ? '<p class="voucher-proof-recorded">Delivery proof recorded</p>' : '') + '<p class="voucher-footer">' + esc(model.footer) + '</p></section>';
   }
@@ -1565,12 +1637,28 @@
     var product = productId ? getProduct(productId) : null;
     var categoryNames = state.categories.map(function (category) { return category.name; });
     var selectedPhotoFile = null;
-    modal('<form id="product-form"><div class="modal-head"><div><p class="eyebrow">Catalogue</p><h2>' + (product ? 'Edit product' : 'Add product') + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="form-grid"><label class="field full-field">Product name<input name="name" required value="' + (product ? esc(product.name) : '') + '"></label><div class="field category-combobox"><label for="product-category">Category</label><input id="product-category" name="category" role="combobox" aria-autocomplete="list" aria-controls="category-suggestions" aria-expanded="false" required autocomplete="off" value="' + (product ? esc(product.category) : '') + '"><div class="category-suggestions" id="category-suggestions" role="listbox" hidden></div></div><label class="field">Price (MMK)<input name="price" type="number" min="0" required value="' + (product ? product.price : '') + '"></label><label class="field">Current stock<input name="stock" type="number" min="0" step="1" required value="' + (product ? product.stock : '') + '"></label><label class="field">Unit<select name="unit" required><option value="pcs" ' + (!product || product.unit === 'pcs' ? 'selected' : '') + '>pcs</option><option value="box" ' + (product && product.unit === 'box' ? 'selected' : '') + '>box</option></select></label><label class="field">Minimum order quantity<input name="minimumOrderQuantity" type="number" min="1" step="1" required value="' + (product ? product.minimumOrderQuantity : 1) + '"></label><div class="field full-field"><span>Product photo</span><div class="photo-drop-zone" id="product-photo-drop" role="button" tabindex="0" aria-label="Browse or drop a product photo"><input id="product-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden><button class="secondary" id="browse-product-photo" type="button">Browse image</button><span>or drag and drop here</span><small>JPEG, PNG or WebP · Maximum 500 KB</small></div><p class="photo-file-status" id="product-photo-status" aria-live="polite">' + (product && product.photo ? 'Current photo will be kept unless a new image is selected.' : 'No image selected.') + '</p></div><div class="photo-upload-preview full-field" id="product-preview">' + photoMarkup(product || { name: 'New product', photo: '' }) + '</div></div><div class="two-button"><button class="primary" type="submit">Save product</button></div></form>');
+    modal('<form id="product-form"><div class="modal-head"><div><p class="eyebrow">Catalogue</p><h2>' + (product ? 'Edit product' : 'Add product') + '</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><div class="form-grid"><label class="field full-field">Product name<input name="name" required value="' + (product ? esc(product.name) : '') + '"></label><div class="field category-combobox"><label for="product-category">Category</label><input id="product-category" name="category" role="combobox" aria-autocomplete="list" aria-controls="category-suggestions" aria-expanded="false" required autocomplete="off" value="' + (product ? esc(product.category) : '') + '"><div class="category-suggestions" id="category-suggestions" role="listbox" hidden></div></div><fieldset class="full-field sales-mode-field"><legend>Sales unit setup</legend><div class="prototype-segments"><label><input type="radio" name="salesMode" value="pcs_only" ' + (!product || product.salesMode === 'pcs_only' ? 'checked' : '') + '><span>Pcs only</span></label><label><input type="radio" name="salesMode" value="box_only" ' + (product && product.salesMode === 'box_only' ? 'checked' : '') + '><span>Box only</span></label><label><input type="radio" name="salesMode" value="pcs_and_box" ' + (product && product.salesMode === 'pcs_and_box' ? 'checked' : '') + '><span>Pcs + Box</span></label></div></fieldset><div class="sales-fields" data-sales-fields="pcs"><label class="field">Price per pcs (MMK)<input name="pcsPrice" type="number" min="0" step="1" value="' + (product && product.pcsPrice !== null ? product.pcsPrice : '') + '"></label><label class="field">Minimum pcs quantity<input name="minimumPcs" type="number" min="1" step="1" value="' + (product && product.minimumPcsQuantity !== null ? product.minimumPcsQuantity : 1) + '"></label></div><div class="sales-fields" data-sales-fields="box"><label class="field">Pieces per box<input name="piecesPerBox" type="number" min="1" step="1" value="' + (product && product.piecesPerBox !== null ? product.piecesPerBox : '') + '"></label><label class="field">Price per box (MMK)<input name="boxPrice" type="number" min="0" step="1" value="' + (product && product.boxPrice !== null ? product.boxPrice : '') + '"></label><label class="field">Minimum box quantity<input name="minimumBox" type="number" min="1" step="1" value="' + (product && product.minimumBoxQuantity !== null ? product.minimumBoxQuantity : 1) + '"></label></div><label class="field full-field">Current stock (pcs)<input name="stock" type="number" min="0" step="1" required value="' + (product ? product.stock : 0) + '"><small id="product-stock-helper" class="stock-equivalent"></small></label><div class="field full-field"><span>Product photo</span><div class="photo-drop-zone" id="product-photo-drop" role="button" tabindex="0" aria-label="Browse or drop a product photo"><input id="product-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden><button class="secondary" id="browse-product-photo" type="button">Browse image</button><span>or drag and drop here</span><small>JPEG, PNG or WebP · Maximum 500 KB</small></div><p class="photo-file-status" id="product-photo-status" aria-live="polite">' + (product && product.photo ? 'Current photo will be kept unless a new image is selected.' : 'No image selected.') + '</p></div><div class="photo-upload-preview full-field" id="product-preview">' + photoMarkup(product || { name: 'New product', photo: '' }) + '</div></div><div class="two-button"><button class="primary" type="submit">Save product</button></div></form>');
 
+    document.querySelector('#modal-root .modal').classList.add('modal-wide');
     var categoryInput = document.getElementById('product-category');
     var categoryList = document.getElementById('category-suggestions');
     var categoryMatches = [];
     var highlightedCategory = -1;
+
+    function refreshSalesFields() {
+      var mode = document.querySelector('[name="salesMode"]:checked').value;
+      document.querySelector('[data-sales-fields="pcs"]').hidden = mode === 'box_only';
+      document.querySelector('[data-sales-fields="box"]').hidden = mode === 'pcs_only';
+      ['pcsPrice', 'minimumPcs'].forEach(function (name) { document.querySelector('[name="' + name + '"]').required = mode !== 'box_only'; });
+      ['piecesPerBox', 'boxPrice', 'minimumBox'].forEach(function (name) { document.querySelector('[name="' + name + '"]').required = mode !== 'pcs_only'; });
+      var pieces = Number(document.querySelector('[name="piecesPerBox"]').value);
+      var stock = Number(document.querySelector('[name="stock"]').value);
+      document.getElementById('product-stock-helper').textContent = mode !== 'pcs_only' && Number.isInteger(pieces) && pieces > 0 && Number.isInteger(stock) && stock >= 0 ? Math.floor(stock / pieces) + ' full box(es) + ' + (stock % pieces) + ' pcs remaining' : 'Physical stock is always stored in pcs.';
+    }
+    document.querySelectorAll('[name="salesMode"]').forEach(function (input) { input.addEventListener('change', refreshSalesFields); });
+    document.querySelector('[name="piecesPerBox"]').addEventListener('input', refreshSalesFields);
+    document.querySelector('[name="stock"]').addEventListener('input', refreshSalesFields);
+    refreshSalesFields();
 
     function closeCategorySuggestions() {
       categoryList.hidden = true;
@@ -1673,12 +1761,21 @@
     document.getElementById('product-form').addEventListener('submit', async function (event) {
       event.preventDefault();
       var data = new FormData(event.target);
-      var price = Number(data.get('price'));
       var stock = Number(data.get('stock'));
-      var minimumOrderQuantity = Number(data.get('minimumOrderQuantity'));
-      if (!Number.isFinite(price) || price < 0) return toast('Enter a valid product price.');
+      var salesMode = String(data.get('salesMode'));
+      var hasPcs = salesMode !== 'box_only'; var hasBox = salesMode !== 'pcs_only';
+      var pcsPrice = hasPcs ? Number(data.get('pcsPrice')) : null;
+      var boxPrice = hasBox ? Number(data.get('boxPrice')) : null;
+      var piecesPerBox = hasBox ? Number(data.get('piecesPerBox')) : null;
+      var minimumPcs = hasPcs ? Number(data.get('minimumPcs')) : null;
+      var minimumBox = hasBox ? Number(data.get('minimumBox')) : null;
+      if (!['pcs_only', 'box_only', 'pcs_and_box'].includes(salesMode)) return toast('Choose a valid sales unit setup.');
+      if (hasPcs && (!Number.isFinite(pcsPrice) || pcsPrice < 0)) return toast('Enter a valid price per pcs.');
+      if (hasBox && (!Number.isFinite(boxPrice) || boxPrice < 0)) return toast('Enter a valid price per box.');
+      if (hasBox && (!Number.isInteger(piecesPerBox) || piecesPerBox < 1)) return toast('Pieces per box must be a positive whole number.');
+      if (hasPcs && (!Number.isInteger(minimumPcs) || minimumPcs < 1)) return toast('Minimum pcs quantity must be a positive whole number.');
+      if (hasBox && (!Number.isInteger(minimumBox) || minimumBox < 1)) return toast('Minimum box quantity must be a positive whole number.');
       if (!Number.isInteger(stock) || stock < 0) return toast('Enter a whole stock quantity of 0 or more.');
-      if (!Number.isInteger(minimumOrderQuantity) || minimumOrderQuantity < 1) return toast('Minimum order quantity must be a positive whole number.');
       var productIdValue = product ? product.id : crypto.randomUUID();
       var photo = product ? product.photo : '';
       var submitButton = event.target.querySelector('button[type="submit"]');
@@ -1691,17 +1788,20 @@
           photoStatus.classList.remove('success', 'error');
           photo = await uploadProductImage(productIdValue, selectedPhotoFile);
         }
-        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, price: price, stock_quantity: stock, unit: data.get('unit'), minimum_order_quantity: minimumOrderQuantity, image_url: supabaseConfig.canonicalStorageUrl(photo) || null, is_active: product ? !product.inactive : true };
+        var values = { id: productIdValue, name: String(data.get('name')).trim(), category_id: category.id, sales_mode: salesMode, pcs_price: pcsPrice, box_price: boxPrice, pieces_per_box: piecesPerBox, minimum_pcs_quantity: minimumPcs, minimum_box_quantity: minimumBox, price: hasPcs ? pcsPrice : boxPrice, stock_quantity: stock, unit: hasPcs ? 'pcs' : 'box', minimum_order_quantity: hasPcs ? minimumPcs : minimumBox, image_url: supabaseConfig.canonicalStorageUrl(photo) || null, is_active: product ? !product.inactive : true };
         var result = product
           ? await supabaseClient.rpc('update_product_with_stock', {
             p_product_id: product.id,
             p_expected_updated_at: product.updatedAt,
             p_name: values.name,
             p_category_id: values.category_id,
-            p_price: values.price,
+            p_sales_mode: values.sales_mode,
+            p_pcs_price: values.pcs_price,
+            p_box_price: values.box_price,
+            p_pieces_per_box: values.pieces_per_box,
+            p_minimum_pcs_quantity: values.minimum_pcs_quantity,
+            p_minimum_box_quantity: values.minimum_box_quantity,
             p_stock_quantity: values.stock_quantity,
-            p_unit: values.unit,
-            p_minimum_order_quantity: values.minimum_order_quantity,
             p_image_url: values.image_url,
             p_is_active: values.is_active
           })

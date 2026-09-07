@@ -2,7 +2,7 @@
   'use strict';
 
   var TEMPLATE_URL = 'assets/YDG%20Product%20Export%20Template.xlsx';
-  var HEADERS = ['No', 'Product Name', 'Product Photo', 'Category', 'Price', 'Stock', 'Unit'];
+  var HEADERS = ['No', 'Product Name', 'Product Photo', 'Category', 'Sales Mode', 'Pcs Price', 'Min Pcs', 'Pieces / Box', 'Box Price', 'Min Box', 'Stock (pcs)'];
 
   function cloneStyle(style) {
     return style ? JSON.parse(JSON.stringify(style)) : {};
@@ -63,7 +63,7 @@
 
     var headerStyles = [];
     var sampleStyles = [];
-    for (var column = 1; column <= 6; column += 1) {
+    for (var column = 1; column <= 7; column += 1) {
       headerStyles[column] = cloneStyle(sheet.getCell(1, column).style);
       sampleStyles[column] = cloneStyle(sheet.getCell(2, column).style);
     }
@@ -74,10 +74,10 @@
     HEADERS.forEach(function (heading, index) {
       var cell = sheet.getCell(1, index + 1);
       cell.value = heading;
-      cell.style = cloneStyle(headerStyles[Math.min(index + 1, 6)]);
+      cell.style = cloneStyle(headerStyles[Math.min(index + 1, 7)]);
     });
     sheet.getRow(1).height = headerHeight;
-    sheet.getColumn(7).width = 12;
+    [5, 6, 7, 8, 9, 10, 11].forEach(function (column) { sheet.getColumn(column).width = column === 5 ? 16 : 13; });
 
     if (options.onStatus) options.onStatus('Adding ' + products.length + ' product(s)…');
     for (var index = 0; index < products.length; index += 1) {
@@ -85,17 +85,16 @@
       var rowNumber = index + 2;
       var row = sheet.getRow(rowNumber);
       row.height = productHeight;
-      row.values = [index + 1, product.name, '', product.category, Number(product.price), Number(product.stock), product.unit === 'box' ? 'box' : 'pcs'];
-      for (var cellIndex = 1; cellIndex <= 7; cellIndex += 1) {
-        row.getCell(cellIndex).style = cloneStyle(sampleStyles[Math.min(cellIndex, 6)]);
+      row.values = [index + 1, product.name, '', product.category, product.salesMode, product.pcsPrice, product.minimumPcsQuantity, product.piecesPerBox, product.boxPrice, product.minimumBoxQuantity, Number(product.stock)];
+      for (var cellIndex = 1; cellIndex <= HEADERS.length; cellIndex += 1) {
+        row.getCell(cellIndex).style = cloneStyle(sampleStyles[Math.min(cellIndex, 7)]);
       }
       row.getCell(1).alignment = { vertical: 'middle', horizontal: 'right' };
       row.getCell(2).alignment = { vertical: 'middle', horizontal: 'left' };
       row.getCell(3).alignment = { vertical: 'middle', horizontal: 'center' };
       row.getCell(4).alignment = { vertical: 'middle', horizontal: 'left' };
-      row.getCell(5).numFmt = '#,##0';
-      row.getCell(6).numFmt = '#,##0';
-      row.getCell(7).alignment = { vertical: 'middle', horizontal: 'center' };
+      [6, 7, 8, 9, 10, 11].forEach(function (column) { row.getCell(column).numFmt = '#,##0'; });
+      row.getCell(5).alignment = { vertical: 'middle', horizontal: 'center' };
 
       var imageId = await loadPhoto(workbook, product.photo);
       if (imageId !== null) {
@@ -109,9 +108,9 @@
       }
     }
 
-    sheet.autoFilter = { from: 'A1', to: 'G' + (products.length + 1) };
+    sheet.autoFilter = { from: 'A1', to: 'K' + (products.length + 1) };
     sheet.pageSetup = Object.assign({}, sheet.pageSetup || {}, {
-      printArea: 'A1:G' + (products.length + 1),
+      printArea: 'A1:K' + (products.length + 1),
       fitToPage: true,
       fitToWidth: 1,
       fitToHeight: 0
