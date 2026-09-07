@@ -228,6 +228,15 @@
     return cart().reduce(function (sum, item) { return sum + item.quantity; }, 0);
   }
 
+  function updateCartCountBadges() {
+    var count = cartCount();
+    document.querySelectorAll('[data-cart-count]').forEach(function (badge) {
+      badge.textContent = count;
+    });
+    var floatingCart = document.getElementById('floating-cart');
+    if (floatingCart) floatingCart.setAttribute('aria-label', 'Open cart, ' + count + ' items');
+  }
+
   async function loadRemoteCart() {
     var rows = await orderService.listCart();
     var usableRows = rows.filter(function (row) { return row.products && row.products.is_active && !row.products.deleted_at; });
@@ -336,7 +345,8 @@
   function topbar(hasCart) {
     var accountLabel = currentUser.role === 'staff' ? 'Staff account' : 'Owner account';
     var customerMenu = currentUser.role === 'customer' ? '<button class="customer-menu-trigger" id="open-customer-menu" aria-label="Open customer menu"><span class="customer-menu-name">' + esc(currentUser.name) + '</span><span class="hamburger"><i></i><i></i><i></i></span></button>' : '<div class="user-label"><b>' + esc(currentUser.name) + '</b><span>' + accountLabel + '</span></div><button class="logout" id="logout">Log out</button>';
-    return '<header class="topbar"><div class="brand-lockup"><img class="header-brand-logo" src="assets/brand/ydg-logo.webp" alt="Yadanar Theingi Stationery & Fancy"><span>Yadanar Theingi<br>Stationery & Fancy</span></div><div class="top-actions">' + (hasCart ? '<button class="cart-button" id="open-cart">Cart <span class="cart-count">' + cartCount() + '</span></button>' : '') + customerMenu + '</div></header>';
+    var customerSearch = hasCart ? '<label class="header-catalogue-search"><span class="hidden">Search products</span><span aria-hidden="true">⌕</span><input class="search" id="product-search" placeholder="Search products..." autocomplete="off"></label>' : '';
+    return '<header class="topbar ' + (hasCart ? 'customer-topbar' : '') + '"><div class="brand-lockup"><img class="header-brand-logo" src="assets/brand/ydg-logo.webp" alt="Yadanar Theingi Stationery & Fancy"><span>Yadanar Theingi<br>Stationery & Fancy</span></div>' + customerSearch + '<div class="top-actions">' + (hasCart ? '<button class="cart-button desktop-cart-button" id="open-cart">Cart <span class="cart-count" data-cart-count>' + cartCount() + '</span></button>' : '') + customerMenu + '</div></header>';
   }
 
   function profileToCurrentUser(profile, email) {
@@ -550,8 +560,9 @@
   function renderCustomer() {
     customerCatalogue = { items: [], total: 0, search: '', categoryId: '', loading: false, error: '', requestId: customerCatalogue.requestId + 1 };
     customerCategory = 'All';
-    document.getElementById('app').innerHTML = topbar(true) + '<main class="customer-main"><section class="customer-hero"><div><p class="eyebrow">Hello, ' + esc(currentUser.name) + '</p><h1>Order your favourites</h1><p>Choose items, submit your order, and follow the confirmed quantities and shipping status from your customer menu.</p></div><label class="catalogue-search"><span class="hidden">Search products</span><input class="search" id="product-search" placeholder="Search products..." autocomplete="off"></label></section><section><div class="section-title"><h2>Our collection</h2><span id="product-count" aria-live="polite"></span></div><div class="category-filters" id="category-filters"></div><div class="product-grid" id="product-grid" aria-busy="true"></div><div class="catalogue-more" id="customer-product-more"></div></section></main><div id="customer-menu-root"></div><div id="modal-root"></div>';
+    document.getElementById('app').innerHTML = topbar(true) + '<main class="customer-main"><section class="customer-hero"><div><p class="eyebrow">Hello, ' + esc(currentUser.name) + '</p><h1>Order your favourites</h1><p>Choose items, submit your order, and follow the confirmed quantities and shipping status from your customer menu.</p></div></section><section><div class="section-title"><h2>Our collection</h2><span id="product-count" aria-live="polite"></span></div><div class="category-filters" id="category-filters" aria-label="Product categories"></div><div class="product-grid" id="product-grid" aria-busy="true"></div><div class="catalogue-more" id="customer-product-more"></div></section></main><button class="floating-cart-button" id="floating-cart" aria-label="Open cart, ' + cartCount() + ' items"><span class="floating-cart-icon" aria-hidden="true">▣</span><span>Cart</span><span class="cart-count" data-cart-count>' + cartCount() + '</span></button><div id="customer-menu-root"></div><div id="modal-root"></div>';
     document.getElementById('open-cart').addEventListener('click', renderCart);
+    document.getElementById('floating-cart').addEventListener('click', renderCart);
     document.getElementById('product-search').addEventListener('input', debounce(function (event) {
       customerCatalogue.search = event.target.value.trim();
       loadCustomerProducts(true);
@@ -638,10 +649,23 @@
     grid.innerHTML = products.length ? products.map(function (product) {
       var hasPhoto = /^(data:image\/|https:\/\/)/.test(String(product.photo || ''));
       var photo = hasPhoto ? '<button class="product-photo photo-preview-button" data-preview-photo="' + product.id + '" aria-label="Preview ' + esc(product.name) + '" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</button>' : '<div class="product-photo" style="--product-bg:' + product.bg + '">' + photoMarkup(product) + '</div>';
-      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + ' / ' + esc(product.unit) + '</span><span>Minimum ' + product.minimumOrderQuantity + ' ' + esc(product.unit) + '</span></div><div class="card-footer"><input class="qty-input" id="qty-' + product.id + '" type="number" min="' + product.minimumOrderQuantity + '" step="1" value="' + product.minimumOrderQuantity + '"><button class="primary add-to-cart" data-product="' + product.id + '">Add</button></div></div></article>';
+      return '<article class="product-card">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="product-meta"><span class="price">' + money(product.price) + '</span><span class="unit-chip">' + esc(product.unit) + '</span></div><span class="minimum-order">Minimum ' + product.minimumOrderQuantity + ' ' + esc(product.unit) + '</span><div class="card-footer"><div class="quantity-stepper" aria-label="Quantity for ' + esc(product.name) + '"><button type="button" data-quantity-change="-1" data-quantity-target="qty-' + product.id + '" aria-label="Decrease quantity">−</button><input class="qty-input" aria-label="Quantity" id="qty-' + product.id + '" type="number" min="' + product.minimumOrderQuantity + '" step="1" value="' + product.minimumOrderQuantity + '"><button type="button" data-quantity-change="1" data-quantity-target="qty-' + product.id + '" aria-label="Increase quantity">+</button></div><button class="primary add-to-cart" data-product="' + product.id + '">Add to cart</button></div></div></article>';
     }).join('') : '<div class="empty">No matching products found.</div>';
+    document.querySelectorAll('[data-quantity-change]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var input = document.getElementById(button.dataset.quantityTarget);
+        var minimum = Number(input.min) || 1;
+        input.value = Math.max(minimum, (Number(input.value) || minimum) + Number(button.dataset.quantityChange));
+      });
+    });
     document.querySelectorAll('[data-product]').forEach(function (button) {
-      button.addEventListener('click', function () { addToCart(button.dataset.product, Number(document.getElementById('qty-' + button.dataset.product).value || 1)); });
+      button.addEventListener('click', async function () {
+        var original = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Adding…';
+        await addToCart(button.dataset.product, Number(document.getElementById('qty-' + button.dataset.product).value || 1));
+        if (button.isConnected) { button.disabled = false; button.textContent = original; }
+      });
     });
     document.querySelectorAll('[data-preview-photo]').forEach(function (button) {
       button.addEventListener('click', function () { renderPhotoPreview(button.dataset.previewPhoto); });
@@ -717,7 +741,7 @@
     try {
       await orderService.setCartItem(productId, (existing ? existing.quantity : 0) + quantity);
       await loadRemoteCart();
-      document.querySelector('.cart-count').textContent = cartCount();
+      updateCartCountBadges();
       toast(product.name + ' added to cart.');
     } catch (error) { toast(error.message || 'Item could not be added.'); }
   }
@@ -749,11 +773,11 @@
         var quantity = Number(input.value);
         if (!product) return toast('This product is no longer available and will be removed from your cart.');
         if (!Number.isInteger(quantity) || quantity < product.minimumOrderQuantity) return toast('Quantity is below the product minimum.');
-        try { await orderService.setCartItem(item.productId, quantity); await renderCart(); } catch (error) { toast(error.message || 'Cart could not be updated.'); }
+        try { await orderService.setCartItem(item.productId, quantity); await renderCart(); updateCartCountBadges(); } catch (error) { toast(error.message || 'Cart could not be updated.'); }
       });
     });
     document.querySelectorAll('[data-remove-cart]').forEach(function (button) {
-      button.addEventListener('click', async function () { try { await orderService.removeCartItem(button.dataset.removeCart); await renderCart(); document.querySelector('.cart-count').textContent = cartCount(); } catch (error) { toast(error.message || 'Item could not be removed.'); } });
+      button.addEventListener('click', async function () { try { await orderService.removeCartItem(button.dataset.removeCart); await renderCart(); updateCartCountBadges(); } catch (error) { toast(error.message || 'Item could not be removed.'); } });
     });
     var checkout = document.getElementById('checkout');
     if (checkout) checkout.addEventListener('click', renderCheckout);
