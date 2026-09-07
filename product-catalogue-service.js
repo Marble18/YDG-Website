@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var PRODUCT_COLUMNS = 'id, name, description, price, stock_quantity, unit, minimum_order_quantity, image_url, is_active, category_id, deleted_at, created_at, updated_at, categories(name)';
+  var PRODUCT_COLUMNS = 'id, name, description, price, stock_quantity, unit, minimum_order_quantity, sales_mode, pcs_price, box_price, pieces_per_box, minimum_pcs_quantity, minimum_box_quantity, image_url, is_active, category_id, deleted_at, created_at, updated_at, categories(name)';
 
   function escapeLike(value) {
     return String(value || '').trim().replace(/[\\%_]/g, function (character) { return '\\' + character; });
