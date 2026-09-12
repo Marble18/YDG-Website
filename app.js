@@ -764,10 +764,9 @@
   }
 
   function renderCustomerMenu() {
-    document.getElementById('customer-menu-root').innerHTML = '<div class="customer-menu-backdrop" id="close-customer-menu"></div><aside class="customer-menu-panel"><div class="customer-menu-head"><div><p class="eyebrow">Customer menu</p><h2>' + esc(currentUser.name) + '</h2></div><button class="icon-btn" id="close-customer-menu-button">×</button></div><button class="customer-menu-item" id="open-recent-orders"><span>Recent orders</span><small>Search order ID & view voucher</small></button><button class="customer-menu-item danger" id="customer-menu-logout"><span>Log out</span><small>Sign out of this customer account</small></button></aside>';
+    document.getElementById('customer-menu-root').innerHTML = '<div class="customer-menu-backdrop" id="close-customer-menu"></div><aside class="customer-menu-panel"><div class="customer-menu-head"><div><p class="eyebrow">Customer menu</p><h2>' + esc(currentUser.name) + '</h2></div><button class="icon-btn" id="close-customer-menu-button">×</button></div><button class="customer-menu-item danger" id="customer-menu-logout"><span>Log out</span><small>Sign out of this customer account</small></button></aside>';
     document.getElementById('close-customer-menu').addEventListener('click', closeCustomerMenu);
     document.getElementById('close-customer-menu-button').addEventListener('click', closeCustomerMenu);
-    document.getElementById('open-recent-orders').addEventListener('click', function () { closeCustomerMenu(); renderRecentOrders(); });
     document.getElementById('customer-menu-logout').addEventListener('click', logout);
   }
 
