@@ -171,6 +171,21 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .product-card .qty-input::-webkit-inner-spin-button, .product-card .qty-input::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
 .add-to-cart { flex: 1; }
 .product-card .add-to-cart { min-height: 44px; border-radius: var(--shape-pill); }
+/* Customer catalogue information hierarchy; management and voucher styles stay independent. */
+.customer-main .product-card { display: flex; flex-direction: column; }
+.customer-main .product-card > .product-photo { flex-shrink: 0; }
+.customer-main .product-info { display: flex; flex: 1; flex-direction: column; gap: 8px; min-width: 0; }
+.customer-main .product-name { margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.customer-main .product-category { overflow-wrap: anywhere; }
+.customer-main .product-meta { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: baseline; gap: 4px 8px; }
+.customer-main .product-meta .price { font-size: clamp(18px, 2vw, 24px); font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
+.customer-main .product-meta .unit-chip { padding: 0; background: transparent; color: var(--muted); font-size: 12px; }
+.customer-main .minimum-order { margin: 0; line-height: 1.4; }
+.customer-main .unit-choice { min-width: 44px; min-height: 44px; }
+.customer-main .box-equivalent { line-height: 1.4; }
+.customer-main .card-order-total { padding: 8px; border-radius: 8px; background: var(--surface-container); line-height: 1.5; overflow-wrap: anywhere; }
+.customer-main [data-card-total][hidden], .customer-main [data-card-equivalent][hidden] { display: none; }
+.customer-main .card-footer { grid-template-columns: minmax(0, 1fr); margin-top: auto; padding-top: 6px; }
 .floating-cart-button { display: flex; position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 8; min-height: 52px; align-items: center; gap: 8px; padding: 8px 10px 8px 16px; border: 0; border-radius: var(--shape-pill); background: var(--wine-deep); color: var(--on-primary); box-shadow: 0 12px 30px rgba(95, 43, 65,.3); font-weight: 700; transition: transform .2s var(--motion-standard), box-shadow .2s var(--motion-standard); }
 .floating-cart-button:hover { transform: translateY(-2px); box-shadow: 0 16px 34px rgba(95, 43, 65,.34); }
 .floating-cart-icon { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
