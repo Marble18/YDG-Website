@@ -1993,45 +1993,66 @@
     await refreshCataloguePage(product.name + ' is active again.');
   }
 
-  function renderCategoryAdjust() {
-    var categories = state.products.filter(function (product) { return !product.inactive && !product.deleted; }).map(function (product) { return product.category; }).filter(function (value, index, list) { return list.indexOf(value) === index; }).sort();
-    modal('<form id="category-form"><div class="modal-head"><div><p class="eyebrow">Pricing tool</p><h2>Adjust category prices</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Increase or reduce every product in one category at the same time.</p><label class="field">Category<select name="category">' + categories.map(function (category) { return '<option value="' + esc(category) + '">' + esc(category) + '</option>'; }).join('') + '</select></label><label class="field">Percentage change<input name="percentage" type="number" min="-100" step="0.01" required placeholder="Example: 10 or -5"></label><p class="photo-help">10 increases by 10%. -5 reduces by 5%. Prices are rounded to the nearest 50 MMK.</p><div class="two-button"><button class="primary" type="submit">Apply price change</button></div></form>');
-    document.getElementById('category-form').addEventListener('submit', async function (event) {
-      event.preventDefault();
-      var data = new FormData(event.target);
-      var percentage = Number(data.get('percentage'));
-      if (!Number.isFinite(percentage)) return toast('Enter a valid percentage.');
-      var changed = state.products.filter(function (product) { return !product.inactive && !product.deleted && product.category === data.get('category'); });
-      try {
-        await Promise.all(changed.map(function (product) {
-          var newPrice = Math.max(0, Math.round(product.price * (1 + percentage / 100) / 50) * 50);
-          return supabaseClient.from('products').update({ price: newPrice }).eq('id', product.id).then(function (result) { if (result.error) throw result.error; });
-        }));
-        await refreshCataloguePage(changed.length + ' product price(s) updated.');
-      } catch (error) { toast(error.message || 'Category prices could not be updated.'); }
-    });
-  }
-
   function renderDatabaseCategoryAdjust() {
     var categories = state.categories.filter(function (category) { return category.is_active !== false; }).slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
-    modal('<form id="category-form"><div class="modal-head"><div><p class="eyebrow">Pricing tool</p><h2>Adjust category prices</h2></div><button class="icon-btn" id="close-modal" type="button">x</button></div><p class="subtext">Update every active product in one category with one protected database operation.</p><label class="field">Category<select name="categoryId" required>' + categories.map(function (category) { return '<option value="' + category.id + '">' + esc(category.name) + '</option>'; }).join('') + '</select></label><label class="field">Percentage change<input name="percentage" type="number" min="-100" max="10000" step="0.01" required placeholder="Example: 10 or -5"></label><p class="photo-help">10 increases by 10%. -5 reduces by 5%. Prices are rounded to the nearest 50 MMK.</p><p class="export-status" id="category-adjust-status" aria-live="polite"></p><div class="two-button"><button class="primary" id="apply-category-adjust" type="submit">Apply price change</button></div></form>');
-    document.getElementById('category-form').addEventListener('submit', async function (event) {
+    modal('<form id="category-form"><div class="modal-head"><div><p class="eyebrow">Pricing tool</p><h2>Adjust category prices</h2></div><button class="icon-btn" id="close-modal" type="button">×</button></div><p class="subtext">Update every active product in one category with one protected database operation.</p><label class="field">Category<select name="categoryId" required>' + categories.map(function (category) { return '<option value="' + category.id + '">' + esc(category.name) + '</option>'; }).join('') + '</select></label><label class="field">Percentage change<input name="percentage" type="number" min="-100" max="10000" step="0.01" required placeholder="Example: 10 or -5"></label><p class="photo-help">10 increases by 10%. -5 reduces by 5%. Prices are rounded to the nearest whole MMK.</p><div id="category-price-preview"></div><p class="export-status" id="category-adjust-status" aria-live="polite"></p><div class="two-button"><button class="primary" id="apply-category-adjust" type="submit">Preview price change</button></div></form>');
+    var form = document.getElementById('category-form');
+    var button = document.getElementById('apply-category-adjust');
+    var status = document.getElementById('category-adjust-status');
+    var preview = document.getElementById('category-price-preview');
+    var reviewed = null;
+    var revision = 0;
+    var busy = false;
+    function resetPreview() {
+      revision += 1; reviewed = null; preview.innerHTML = '';
+      status.textContent = ''; status.className = 'export-status';
+      button.textContent = 'Preview price change'; button.disabled = busy;
+    }
+    form.addEventListener('input', resetPreview);
+    form.addEventListener('change', resetPreview);
+    form.addEventListener('submit', async function (event) {
       event.preventDefault();
-      var data = new FormData(event.currentTarget);
+      if (busy || !form.reportValidity()) return;
+      var data = new FormData(form);
       var percentage = Number(data.get('percentage'));
-      if (!Number.isFinite(percentage) || percentage < -100 || percentage > 10000) return toast('Enter a valid percentage from -100 to 10000.');
-      var button = document.getElementById('apply-category-adjust');
-      var status = document.getElementById('category-adjust-status');
-      button.disabled = true;
-      status.textContent = 'Updating category prices...';
+      var categoryId = data.get('categoryId');
+      if (!String(data.get('percentage') || '').trim() || !categoryId || !Number.isFinite(percentage) || percentage < -100 || percentage > 10000) return toast('Enter a valid percentage from -100 to 10000.');
+      var requestRevision = revision;
+      var confirming = reviewed && reviewed.categoryId === categoryId && reviewed.percentage === percentage;
+      busy = true; button.disabled = true; status.className = 'export-status';
+      status.textContent = confirming ? 'Updating category prices...' : 'Loading read-only price preview...';
+      var fields = form.querySelectorAll('select, input');
+      if (confirming) fields.forEach(function (field) { field.disabled = true; });
       try {
-        var result = await supabaseClient.rpc('adjust_product_category_prices', { p_category_id: data.get('categoryId'), p_percentage: percentage });
-        if (result.error) throw result.error;
-        await refreshCataloguePage(Number(result.data || 0) + ' product price(s) updated.');
+        if (confirming) {
+          var changedCount = await categoryService.adjustPrices(categoryId, percentage);
+          reviewed = null;
+          try { await refreshCataloguePage(changedCount + ' product price(s) updated.'); }
+          catch (refreshError) { closeModal(); toast('Prices were updated. Reload Products to see the latest prices.'); }
+          return;
+        }
+        var result = await categoryService.previewPriceAdjustment(categoryId, percentage);
+        if (!form.isConnected || requestRevision !== revision) return;
+        var rows = result.samples.map(function (product) {
+          function pricePair(before, after) { return before === null ? '—' : money(before) + ' → ' + money(after); }
+          return '<tr><td>' + esc(product.name) + '</td><td>' + pricePair(product.pcs_price, product.adjusted_pcs_price) + '</td><td>' + pricePair(product.box_price, product.adjusted_box_price) + '</td></tr>';
+        }).join('');
+        preview.innerHTML = rows ? '<p class="subtext">Sample of up to 5 active products. Pcs / box: current → adjusted.</p><div class="table-wrap"><table><thead><tr><th>Product</th><th>Pcs price</th><th>Box price</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '';
+        status.textContent = result.product_count ? result.product_count + ' active product(s). No prices changed yet. Confirm applies this percentage to current database prices; concurrent edits may change this preview.' : 'No active products in this category. No prices changed.';
+        reviewed = result.product_count ? { categoryId: categoryId, percentage: percentage } : null;
+        button.textContent = result.product_count ? 'Confirm price change' : 'Preview price change';
       } catch (error) {
-        button.disabled = false;
+        if (!form.isConnected || requestRevision !== revision) return;
+        reviewed = null; preview.innerHTML = '';
+        button.textContent = 'Retry preview';
         status.className = 'export-status error';
-        status.textContent = error.message || 'Category prices could not be updated.';
+        status.textContent = error.message || 'Category prices could not be updated. Please try again.';
+      } finally {
+        busy = false;
+        if (form.isConnected) {
+          button.disabled = false;
+          fields.forEach(function (field) { field.disabled = false; });
+        }
       }
     });
   }
