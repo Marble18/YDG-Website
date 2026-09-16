@@ -664,6 +664,16 @@
     }
   }
 
+  // Display-only box equivalent; never changes the separate pcs/cart pricing contract.
+  function customerBoxPriceBreakdown(product) {
+    var pieces = Number(product.piecesPerBox);
+    var boxPrice = productPrice(product, 'box');
+    if (!Number.isInteger(pieces) || pieces < 1 || !Number.isFinite(boxPrice) || boxPrice < 0) return '';
+    var pieceRate = Math.round((boxPrice / pieces) * 100) / 100;
+    var approximate = Math.abs(pieceRate * pieces - boxPrice) > 0.000001;
+    return pieces + ' pcs × ' + pieceRate.toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' MMK' + (approximate ? ' ≈ ' : ' = ') + money(boxPrice) + ' / box';
+  }
+
   function renderCustomerProducts() {
     var grid = document.getElementById('product-grid');
     var count = document.getElementById('product-count');
@@ -691,7 +701,7 @@
       var choices = ['pcs', 'box'].filter(function (unit) { return productAllowsUnit(product, unit); }).map(function (unit) {
         return '<button type="button" class="unit-choice ' + (unit === defaultUnit ? 'active' : '') + '" data-product-unit="' + product.id + '" data-unit="' + unit + '" aria-pressed="' + (unit === defaultUnit) + '">' + unitLabel(unit, 1) + '</button>';
       }).join('');
-      return '<article class="product-card" id="product-card-' + product.id + '" data-selected-unit="' + defaultUnit + '">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="customer-unit-picker" role="group" aria-label="Choose sales unit for ' + esc(product.name) + '">' + choices + '</div><div class="product-meta"><span class="price" data-card-price>' + money(productPrice(product, defaultUnit)) + '</span><span class="unit-chip" data-card-unit>/ ' + defaultUnit + '</span></div><span class="minimum-order" data-card-minimum>Minimum ' + minimum + ' ' + unitLabel(defaultUnit, minimum) + '</span><span class="box-equivalent" data-card-equivalent ' + (defaultUnit === 'box' ? '' : 'hidden') + '>' + (defaultUnit === 'box' ? '1 box = ' + product.piecesPerBox + ' pcs' : '') + '</span><div class="card-order-total" data-card-total aria-live="polite" aria-atomic="true" ' + (defaultUnit === 'box' ? '' : 'hidden') + '>' + (defaultUnit === 'box' ? minimum + ' ' + unitLabel('box', minimum) + ' × ' + money(productPrice(product, defaultUnit)) + ' = ' + money(minimum * productPrice(product, defaultUnit)) : '') + '</div><div class="card-footer"><div class="quantity-stepper" aria-label="Quantity for ' + esc(product.name) + '"><button type="button" data-quantity-change="-1" data-quantity-target="qty-' + product.id + '" aria-label="Decrease quantity">−</button><input class="qty-input" aria-label="Quantity" id="qty-' + product.id + '" type="number" min="' + minimum + '" step="1" value="' + minimum + '" data-product-quantity="' + product.id + '"><button type="button" data-quantity-change="1" data-quantity-target="qty-' + product.id + '" aria-label="Increase quantity">+</button></div><button class="primary add-to-cart" data-product="' + product.id + '">Add to cart</button></div></div></article>';
+      return '<article class="product-card" id="product-card-' + product.id + '" data-selected-unit="' + defaultUnit + '">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="customer-unit-picker" role="group" aria-label="Choose sales unit for ' + esc(product.name) + '">' + choices + '</div><div class="product-meta"><span class="price" data-card-price>' + money(productPrice(product, defaultUnit)) + '</span><span class="unit-chip" data-card-unit>/ ' + defaultUnit + '</span></div><span class="minimum-order" data-card-minimum>Minimum ' + minimum + ' ' + unitLabel(defaultUnit, minimum) + '</span><span class="box-equivalent" data-card-equivalent ' + (defaultUnit === 'box' ? '' : 'hidden') + '>' + (defaultUnit === 'box' ? '1 box = ' + product.piecesPerBox + ' pcs' : '') + '</span><div class="card-order-total" data-card-total title="Per-piece rate within one box, calculated from the box price; not the separately sold pcs price." aria-live="polite" aria-atomic="true" ' + (defaultUnit === 'box' ? '' : 'hidden') + '>' + (defaultUnit === 'box' ? customerBoxPriceBreakdown(product) : '') + '</div><div class="card-footer"><div class="quantity-stepper" aria-label="Quantity for ' + esc(product.name) + '"><button type="button" data-quantity-change="-1" data-quantity-target="qty-' + product.id + '" aria-label="Decrease quantity">−</button><input class="qty-input" aria-label="Quantity" id="qty-' + product.id + '" type="number" min="' + minimum + '" step="1" value="' + minimum + '" data-product-quantity="' + product.id + '"><button type="button" data-quantity-change="1" data-quantity-target="qty-' + product.id + '" aria-label="Increase quantity">+</button></div><button class="primary add-to-cart" data-product="' + product.id + '">Add to cart</button></div></div></article>';
     }).join('') : '<div class="empty">No matching products found.</div>';
     function refreshCard(productId, selectedUnit, resetQuantity) {
       var product = getProduct(productId); var card = document.getElementById('product-card-' + productId); var input = document.getElementById('qty-' + productId);
@@ -705,7 +715,7 @@
       card.querySelectorAll('[data-product-unit]').forEach(function (button) { var active = button.dataset.unit === selectedUnit; button.classList.toggle('active', active); button.setAttribute('aria-pressed', active ? 'true' : 'false'); });
       var total = card.querySelector('[data-card-total]');
       total.hidden = selectedUnit !== 'box';
-      total.textContent = selectedUnit === 'box' ? Number(input.value) + ' ' + unitLabel('box', input.value) + ' × ' + money(productPrice(product, selectedUnit)) + ' = ' + money(Number(input.value) * productPrice(product, selectedUnit)) : '';
+      total.textContent = selectedUnit === 'box' ? customerBoxPriceBreakdown(product) : '';
     }
     document.querySelectorAll('[data-product-unit]').forEach(function (button) { button.addEventListener('click', function () { refreshCard(button.dataset.productUnit, button.dataset.unit, true); }); });
     document.querySelectorAll('[data-quantity-change]').forEach(function (button) {
