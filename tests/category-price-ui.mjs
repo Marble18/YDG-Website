@@ -78,6 +78,26 @@ try {
   delay=true;await percent.fill('10');await button.click();await percent.fill('20');
   await page.waitForFunction(()=>!document.getElementById('apply-category-adjust').disabled);
   assert.equal(await button.innerText(),'Preview price change');assert.equal(await page.locator('#category-price-preview').innerText(),'');
+  // Decimal percentages survive native validation, both service requests and SQL unchanged.
+  delay=false;
+  for(const percentage of [5.5,-2.5,5.555,-2.555,0.005]) {
+    await seed(db);const unchanged=await snapshot(db);await asUser(db);
+    await page.evaluate(()=>{window.savedMessage=null;window.qa.open();});
+    await percent.fill(String(percentage));
+    assert.equal(await percent.evaluate(el=>el.checkValidity()),true);
+    await button.click();
+    await page.waitForFunction(()=>document.getElementById('apply-category-adjust').textContent==='Confirm price change');
+    assert.equal(calls.at(-1).args.p_percentage,percentage);
+    const expected=Math.round(13574*(100+percentage)/100);
+    assert.ok((await page.locator('#category-price-preview').innerText()).includes(expected.toLocaleString('en-US')+' MMK'));
+    assert.deepEqual(await snapshot(db),unchanged);await asUser(db);
+    await button.click();await page.waitForFunction(()=>window.savedMessage);
+    assert.equal(calls.at(-1).name,'adjust_product_category_prices');
+    assert.equal(calls.at(-1).args.p_percentage,percentage);
+    const result=await snapshot(db);
+    assert.equal(Number(result[0].pcs_price),expected);
+    assert.equal(Number(result[1].box_price),Math.round(13575*(100+percentage)/100));
+  }
   assert.deepEqual(errors,[]);
   console.log('PASS: real UI/service + local SQL preview/confirm parity; missing migration fail-closed; no writes on preview; explicit confirmation; stale preview invalidation; validation; staff/customer authorization; desktop/mobile screenshots.');
 } finally {await browser.close();server.close();await db.close();}

@@ -69,11 +69,11 @@ export async function rpc(db, name, percentage) {
 async function run() {
   const db = await createFixture();
   try {
-    for (const [price, percentage, expected] of [[1357.4,0,1357],[1357.5,0,1358],[1000,35.74,1357],[1000,35.75,1358],[13575,-90,1358],[0,10000,0]]) {
+    for (const [price, percentage, expected] of [[1357.4,0,1357],[1357.5,0,1358],[1000,35.74,1357],[1000,35.75,1358],[13575,-90,1358],[0,10000,0],[1000,5.5,1055],[1000,-2.5,975],[1000,5.555,1056],[1000,-2.555,974],[10000,0.005,10001]]) {
       const result = await db.query('select public.category_adjusted_price($1::numeric,$2::numeric) as price',[price,percentage]);
       assert.equal(Number(result.rows[0].price), expected);
     }
-    for (const percentage of [10, -10, -90, 0, -100, 10000]) {
+    for (const percentage of [10, -10, -90, 0, -100, 10000, 5.5, -2.5, 5.555, -2.555, 0.005]) {
       await seed(db); const before = await snapshot(db); await asUser(db);
       const preview = await rpc(db,'preview_product_category_prices',percentage);
       assert.equal(preview.product_count,3); assert.equal(preview.rounding_rule,'whole_mmk_v1');
