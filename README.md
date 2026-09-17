@@ -22,7 +22,7 @@ Open index.html in a modern browser.
 - Customer voucher access and printing once an order is Ready to Ship
 - Owner-customizable voucher title, colour and footer, with live preview
 - Additional owner accounts for trusted staff
-- Primary-owner-only secure business database backup, dry-run merge restore and separate private Storage archive
+- Owner Dashboard backup/restore is retired; reviewed Windows scripts provide offline scheduled database and Storage backups
 - Under Maintenance mode that blocks customer login but keeps owner access available
 - Required delivery address and optional bus-station name for out-of-town orders
 - Prices in Myanmar Kyat (MMK)
@@ -37,7 +37,7 @@ For the production version, add:
 
 1. A secure backend and database for shared orders, products, customers and inventory.
 2. Password hashing, secure owner authentication and proper access permissions.
-3. Automated backups and deployment to cloud hosting with a custom domain.
+3. Validate and enable the reviewed Windows scheduled-backup scripts before launch; cloud-hosting deployment remains separate.
 4. Server-run backup scheduling, delivery notifications and payment integrations as needed.
 
 The production site can keep the same customer and owner workflows shown in this demo.

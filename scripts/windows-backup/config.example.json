@@ -1,0 +1,9 @@
+{
+  "projectRef": "tfvwfpvdqcbgqnijhhpd",
+  "destinationRoot": "G:\\My Drive\\YDG Backups",
+  "tempRoot": "C:\\Users\\YOUR_WINDOWS_USER\\AppData\\Local\\YDGBackup\\staging",
+  "logRoot": "C:\\Users\\YOUR_WINDOWS_USER\\AppData\\Local\\YDGBackup\\logs",
+  "supabaseCli": "C:\\path\\to\\supabase.exe",
+  "credentialTarget": "YDG/Supabase/DatabasePassword",
+  "serviceRoleCredentialTarget": "YDG/Supabase/ServiceRoleKey"
+}
