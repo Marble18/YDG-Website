@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-09-16
+Last updated: 2026-09-17
 
 ## 1. Project goal
 
@@ -78,7 +78,7 @@ Database တွင် `profiles`, `categories`, `products`, `orders`, `order_ite
 | Customer/staff accounts | Supabase Auth + protected Edge Functions | Live; PR #11 expands active-staff customer operations |
 | Voucher/settings/maintenance | Supabase `voucher_settings` + `app_settings` | Live in PR #16; browser copy is cache only |
 | Delivery proofs | Private Supabase Storage + `delivery_proofs` | Live since PR #14 |
-| Backup/restore | Protected `business-backup` Edge Function + transactional restore RPC | Live since combined PR #16/#17; primary owner only, merge mode, separate private Storage ZIP |
+| Backup | Windows Supabase CLI logical dumps + incremental Storage copies | PR #25 scripts ready for review; computer configuration, credentials, first live run and scheduling are not yet authorized/performed |
 
 ## 5. Target account design
 
@@ -104,7 +104,7 @@ First-version decision:
 - Never trust role, price, stock, order total or account ID sent by the frontend.
 - Hosted Supabase traffic uses a fixed-project, allowlisted same-origin proxy. It does not inject service credentials, does not weaken RLS/RPC authorization and does not expose arbitrary upstream destinations.
 - The existing `sb-tfvwfpvdqcbgqnijhhpd-auth-token` storage key is pinned while switching API origins so signed-in sessions are not silently orphaned. Canonical product-image URLs remain stable in PostgreSQL and are converted to the current same-origin path only at render/export time.
-- Realtime/WebSocket and GraphQL routes are not proxied because this application does not use them. The Netlify Edge gateway streams upstream responses but has a 40-second response-header timeout, so long-running database/Storage backup operations require explicit Deploy Preview regression testing.
+- Realtime/WebSocket and GraphQL routes are not proxied because this application does not use them. Backup generation is retired from the browser/Netlify/Supabase Edge Function request path.
 - Enforce authorization with RLS plus server-side checks.
 - Product stock updates and matching inventory movements remain transaction-safe inventory operations, independent from ordering.
 - Order creation, items, totals and cart clearing are one server/database transaction. Checkout does not reduce or allocate stock.
@@ -129,7 +129,7 @@ First-version decision:
 - PR #16 makes `app_settings` and `voucher_settings` the device-independent source of truth for maintenance mode, backup-frequency preference and voucher title/colour/footer. Anonymous/authenticated clients can read only the non-sensitive display columns; direct writes and audit columns remain inaccessible.
 - Only an active owner can change settings through validated security-definer RPCs. Staff/customer/anonymous writes are denied server-side. Maintenance mode is also enforced by database triggers on customer cart mutations and order creation, so hiding UI is not the authorization boundary.
 - Local Storage retains only a last-known UI/settings cache. PR #17 retires browser snapshot export/restore entirely.
-- Secure business backups never contain Auth passwords/hashes, secret or service-role keys, tokens, signed URLs, RLS policies, Edge Functions or Supabase project configuration.
+- Windows backup scripts never write database passwords, access tokens, private contents or service-role keys to Git, Google Drive or logs. Database dumps exclude Auth password hashes and Storage bytes; Storage is backed up separately.
 - Publishable key is public only with correct RLS/Storage policies; secret/service-role keys are never public.
 
 ## 7. Known issues and risks
@@ -138,7 +138,7 @@ First-version decision:
 - Unit prices and minimum quantities are independent. Box-capable products require a positive pieces-per-box value. Existing `pcs` products preserve price/minimum as pcs-only; legacy `box` products preserve price/minimum as box-only and receive a compatibility pieces-per-box value of `1` because historical data contains no conversion factor. Owners must review those legacy box conversions.
 - Cart identity is customer + product + selected unit, so the same product can have separate pcs and box lines. Checkout revalidates the active product, unit availability, minimum, price and conversion in PostgreSQL and stores immutable requested snapshots plus separate confirmed quantity/price fields. Confirmed unit is deliberately locked to requested unit.
 - Order items persist pieces-per-box and equivalent-pcs audit snapshots. Ready-to-Ship/Delivered details, vouchers and print use confirmed quantity/price with the locked unit; Pending/Review use requested values. No ordering RPC allocates or reduces physical stock.
-- Business backup schema version is `202609070001`; older backup files are intentionally rejected as incompatible. Database restore remains merge-only and private Storage restore remains a separate exact-path operation.
+- The historical dashboard restore schema remains in migrations for audit/rollback compatibility but is no longer exposed or loaded by the web application. Live restore is not part of the Windows backup scripts.
 
 - PR #20 introduces irreversible user-facing Product/Customer deletion. Product deletion is an internal tombstone rather than a row purge: catalogue/search/filter/export/cart/checkout exclude `deleted_at` rows, carts are cleared atomically, the category link is detached, and order/inventory names remain immutable snapshots. The final business decision permits active owners and active staff to invoke it; Deactivate/Activate remains a separate reversible workflow.
 - Product image cleanup is deliberately outside the PostgreSQL transaction. The protected Edge Function removes only the validated exact `product-images` path after the tombstone commits, records removed/failed status, and supports an idempotent retry without restoring the product or broadly deleting Storage objects.
@@ -191,6 +191,11 @@ First-version decision:
 - Deployment: Netlify live URL, Supabase allowed redirects and no repository secrets
 
 ## 11. Change log
+
+- 2026-09-17 (PR #25 direction reset, scripts-only stage): The Owner Dashboard database/Storage backup, validation and restore controls were retired, their browser service is no longer loaded, and every PR #25 browser batching/resume change was reversed without touching unrelated merged product/order/customer code. Historical restore migrations, RPCs and Edge Function source remain dormant for audit compatibility; no migration, restore, cleanup, merge or deployment was run in this stage. The previously authorized live `business-backup` Function deployment is not rolled back here because that would be a separate production deployment requiring explicit approval.
+  - Added review-only Windows PowerShell scripts for official Supabase CLI `roles.sql`, `schema.sql` and `data.sql` dumps, read-only business/Storage counts, SHA-256 manifests, first-full `product-images` plus existing `delivery-proofs`, and later incremental `product-images` sets. Generation remains local until verified; Google Drive publication uses a unique `.incoming-*` directory, destination re-hashing, a final manifest transition and a last-written `BACKUP_COMPLETE` marker. No retention deletion exists.
+  - Runtime config/passwords are not committed. The planned password source is Windows Credential Manager target `YDG/Supabase/DatabasePassword`; setup and task-install scripts exist but have not been run. `G:\My Drive\YDG Backups` was created by the user, but this work did not create its subdirectories or write files there. No Supabase authorization, live backup, Task Scheduler registration or local restore was performed.
+  - Local fixture tests pass for PowerShell parsing, safe relative paths, verified destination copy, incomplete-to-complete publication, checksum validation, secret-field log redaction and absence of the retired dashboard controls. A complete SQL restore test still requires a separately approved disposable local PostgreSQL/Supabase environment.
 
 - 2026-09-16 (PR #24 approved release): After explicit user approval to apply migration, merge and deploy, CLI dry-run confirmed only `202609160001_category_whole_mmk_rounding.sql` was pending; it was applied successfully to linked project `tfvwfpvdqcbgqnijhhpd` with vault/seed/role changes excluded. Live read-only verification confirmed migration history, `whole_mmk_v1` preview, existing active-owner authorization, anonymous RPC denial, authenticated RPC grants and helper privacy. Numeric examples returned 1357/1358 and 1055/975 for half rounding and +5.5%/-2.5%. Product count stayed 1,019 and the full pcs/box/compatibility-price fingerprint was identical before/after. No live price-adjustment RPC was invoked. This supersedes the pending-migration notes below; merge/deploy status is tracked on PR #24 and GitHub deployment checks.
 

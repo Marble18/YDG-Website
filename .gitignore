@@ -4,3 +4,6 @@ supabase/.temp/
 # Local validation artifacts
 .codex-tmp/
 outputs/
+
+# Windows backup runtime configuration (may reference user-local paths)
+scripts/windows-backup/config.json

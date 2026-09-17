@@ -459,7 +459,6 @@ td { padding: 12px 10px; border-top: 1px solid var(--line); vertical-align: midd
   .admin-brand { display: none; }
   .nav-button { width: auto; white-space: nowrap; }
   .admin-content { max-width: 100%; min-width: 0; padding: 27px 18px; width: 100%; }
-  #download-backup, #download-storage-archive { flex: 1 1 170px; }
   .topbar { padding: 0 15px; }
   .topbar .brand-lockup span { display: none; }
   .header-brand-logo { width: 44px; height: 44px; }
