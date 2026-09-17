@@ -18,9 +18,9 @@ try {
 
   $env:SUPABASE_DB_PASSWORD = Get-YdgCredentialPassword -Target $config.credentialTarget
   $common = @('--linked','--project-ref',[string]$config.projectRef)
-  [void](Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments @('db','dump') + $common + @('--role-only','--file',(Join-Path $staging 'roles.sql')))
-  [void](Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments @('db','dump') + $common + @('--file',(Join-Path $staging 'schema.sql')))
-  [void](Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments @('db','dump') + $common + @('--data-only','--use-copy','--file',(Join-Path $staging 'data.sql')))
+  [void](Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments (@('db','dump') + $common + @('--role-only','--file',(Join-Path $staging 'roles.sql'))))
+  [void](Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments (@('db','dump') + $common + @('--file',(Join-Path $staging 'schema.sql'))))
+  [void](Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments (@('db','dump') + $common + @('--data-only','--use-copy','--file',(Join-Path $staging 'data.sql'))))
 
   $minimum = @{ 'roles.sql' = 1; 'schema.sql' = 100; 'data.sql' = 100 }
   foreach ($name in $minimum.Keys) {

@@ -65,9 +65,25 @@ function Invoke-YdgCli {
   foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
   $process = [Diagnostics.Process]::new(); $process.StartInfo = $psi
   [void]$process.Start()
-  $stdout = $process.StandardOutput.ReadToEnd(); $stderr = $process.StandardError.ReadToEnd()
+  # Drain both redirected streams concurrently. Supabase/Docker can emit enough
+  # progress output on stderr to fill the pipe while stdout is still open.
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+  $stderrTask = $process.StandardError.ReadToEndAsync()
   $process.WaitForExit()
-  if ($process.ExitCode -ne 0) { throw "SUPABASE_CLI_FAILED:$($process.ExitCode)" }
+  $stdout = $stdoutTask.GetAwaiter().GetResult()
+  $stderr = $stderrTask.GetAwaiter().GetResult()
+  if ($process.ExitCode -ne 0) {
+    $safeError = [string]$stderr
+    $safeError = $safeError -replace 'eyJ[A-Za-z0-9_.-]+', '[REDACTED_TOKEN]'
+    $safeError = $safeError -replace 'https?://\S+', '[REDACTED_URL]'
+    $safeError = $safeError -replace '(?i)(access[_ -]?token|authorization|password)\s*[:=]\s*\S+', '$1=[REDACTED]'
+    $safeError = $safeError -replace 'ss:///\S+', '[STORAGE_PATH]'
+    $safeError = $safeError -replace '(?i)[A-Z]:\\[^\r\n]+', '[LOCAL_PATH]'
+    $safeLines = @($safeError -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 3)
+    $safeSummary = if ($safeLines.Count) { ($safeLines | ForEach-Object { $_.Trim() }) -join ' | ' } else { 'No safe CLI error detail was returned.' }
+    if ($safeSummary.Length -gt 500) { $safeSummary = $safeSummary.Substring(0, 500) }
+    throw "SUPABASE_CLI_FAILED:$($process.ExitCode):$safeSummary"
+  }
   return $stdout
 }
 

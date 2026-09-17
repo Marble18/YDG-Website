@@ -25,7 +25,7 @@ try {
 
   $current = @()
   foreach ($bucket in $buckets) {
-    $output = Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments @('storage','ls',"ss:///$bucket",'--recursive','--linked','--project-ref',[string]$config.projectRef,'--output','json')
+    $output = Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments @('--experimental','--yes','--dns-resolver','https','storage','ls',"ss:///$bucket",'--recursive','--linked','--project-ref',[string]$config.projectRef,'--output','json')
     $current += ConvertFrom-YdgStorageList -Output $output -Bucket $bucket
   }
   if (($current | Group-Object { "$($_.bucket)/$($_.path)" } | Where-Object Count -gt 1)) { throw 'STORAGE_LIST_DUPLICATE_PATH' }
@@ -47,7 +47,7 @@ try {
     $target = Join-Path $staging ('objects\' + $item.bucket + '\' + $item.path.Replace('/','\'))
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
     try {
-      [void](Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments @('storage','cp',"ss:///$key",$target,'--linked','--project-ref',[string]$config.projectRef))
+      [void](Invoke-YdgCli -Cli $config.supabaseCli -WorkingDirectory $PSScriptRoot -Arguments @('--experimental','--yes','--dns-resolver','https','storage','cp',"ss:///$key",$target,'--linked','--project-ref',[string]$config.projectRef))
       if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw 'DOWNLOADED_FILE_MISSING' }
       $local = Get-Item -LiteralPath $target
       if ($item.bytes -ge 0 -and $local.Length -ne $item.bytes) { throw 'DOWNLOADED_FILE_SIZE_MISMATCH' }
