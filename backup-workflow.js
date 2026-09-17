@@ -86,7 +86,7 @@
     function partition(list){var parts=[],part=[],bytes=0;for(var entry of list){if(part.length&&(part.length>=4||bytes+entry.size>8*1024*1024)){parts.push(part);part=[];bytes=0;}part.push(entry);bytes+=entry.size;}if(part.length)parts.push(part);return parts;}
     async function storage(progress,savePart){progress=progress||function(){};var metadata=await info(progress);
       if(job&&job.ownerId!==metadata.ownerId)job=null;
-      if(!job){var listed=await manifest(progress);if(await hash(listed)!==await hash(await manifest(progress)))fail('Storage changed while listing; start again.');job={ownerId:metadata.ownerId,manifest:listed,parts:partition(listed),completed:[],current:new Map(),startedAt:new Date().toISOString()};}
+      if(!job){progress('Initial Storage scan: reading every approved folder/page once.');var listed=await manifest(progress);job={ownerId:metadata.ownerId,manifest:listed,parts:partition(listed),completed:[],current:new Map(),startedAt:new Date().toISOString()};}
       var currentJob=job;
       if(!root.JSZip)fail('Archive library unavailable. Refresh and retry.');
       for(var partIndex=currentJob.completed.length;partIndex<currentJob.parts.length;partIndex++){
@@ -107,7 +107,7 @@
         await savePart(new Blob([archive],{type:'application/zip'}),filename);
         currentJob.completed.push({partNumber:partIndex+1,filename:filename,files:objects.length,bytes:archive.length,checksum:await hash(archive)});currentJob.current.clear();
       }
-      progress('All parts generated. Rechecking the full Storage manifest before marking the set complete.');
+      progress('Final verification scan: all parts are saved; checking that Storage did not change.');
       if(await hash(currentJob.manifest)!==await hash(await manifest(progress))){job=null;fail('Storage changed during backup. Existing downloaded parts are INCOMPLETE; start a fresh set.');}
       var index={formatVersion:'ydg-storage-set-v1',schemaVersion:SCHEMA,createdAt:currentJob.startedAt,complete:true,totalFiles:currentJob.manifest.length,bucketCounts:counts(currentJob.manifest),partCount:currentJob.parts.length,parts:currentJob.completed,manifestChecksum:await hash(currentJob.manifest),consistency:'Metadata verified before/after; not atomic with database backup. Files must be saved by the browser; retain this completion index and every part.'};
       var result=Object.assign({},index,{integrity:{algorithm:'SHA-256',checksum:await hash(index)}});job=null;return result;

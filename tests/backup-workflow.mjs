@@ -91,6 +91,7 @@ async function storageResumeAndCompletion() {
   assert.equal(result.partCount, 2)
   assert.equal(workflow.hasResume(), false)
   assert.equal(saved.filter((name) => name.includes('part-1-')).length, 1, 'verified part one is not regenerated after resume')
+  assert.equal(fixture.calls.filter((call) => call.action === 'backup-storage-page').length, 4, 'one initial and one final scan cover both approved buckets')
 }
 
 async function authorizationFailureIsNotRetried() {
