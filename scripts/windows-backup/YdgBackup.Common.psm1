@@ -18,7 +18,7 @@ function Get-YdgConfig {
   param([Parameter(Mandatory)][string]$ConfigPath)
   if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw 'CONFIG_NOT_FOUND' }
   $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
-  foreach ($name in 'projectRef','destinationRoot','tempRoot','logRoot','supabaseCli','credentialTarget') {
+  foreach ($name in 'projectRef','destinationRoot','tempRoot','logRoot','supabaseCli','credentialTarget','serviceRoleCredentialTarget') {
     if ([string]::IsNullOrWhiteSpace([string]$config.$name)) { throw "CONFIG_VALUE_MISSING:$name" }
   }
   if ($config.projectRef -notmatch '^[a-z]{20}$') { throw 'PROJECT_REF_INVALID' }
@@ -53,27 +53,45 @@ public static class YdgNativeCredential {
 }
 
 function Invoke-YdgCli {
-  param([Parameter(Mandatory)][string]$Cli, [Parameter(Mandatory)][string[]]$Arguments, [string]$WorkingDirectory)
+  param(
+    [Parameter(Mandatory)][string]$Cli,
+    [Parameter(Mandatory)][string[]]$Arguments,
+    [string]$WorkingDirectory,
+    [ValidateRange(1,6)][int]$MaxAttempts = 1,
+    [ValidateRange(1,30)][int]$RetryDelaySeconds = 5
+  )
   if (-not (Test-Path -LiteralPath $Cli -PathType Leaf)) { throw 'SUPABASE_CLI_NOT_FOUND' }
-  $psi = [Diagnostics.ProcessStartInfo]::new()
-  $psi.FileName = $Cli
-  $psi.WorkingDirectory = $WorkingDirectory
-  $psi.UseShellExecute = $false
-  $psi.RedirectStandardOutput = $true
-  $psi.RedirectStandardError = $true
-  $psi.CreateNoWindow = $true
-  foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
-  $process = [Diagnostics.Process]::new(); $process.StartInfo = $psi
-  [void]$process.Start()
-  # Drain both redirected streams concurrently. Supabase/Docker can emit enough
-  # progress output on stderr to fill the pipe while stdout is still open.
-  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-  $stderrTask = $process.StandardError.ReadToEndAsync()
-  $process.WaitForExit()
-  $stdout = $stdoutTask.GetAwaiter().GetResult()
-  $stderr = $stderrTask.GetAwaiter().GetResult()
-  if ($process.ExitCode -ne 0) {
-    $safeError = [string]$stderr
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    $psi = [Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $Cli
+    $psi.WorkingDirectory = $WorkingDirectory
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::new(); $process.StartInfo = $psi
+    [void]$process.Start()
+    # Drain both redirected streams concurrently. Supabase/Docker can emit enough
+    # progress output on stderr to fill the pipe while stdout is still open.
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    if ($process.ExitCode -eq 0) { return $stdout }
+
+    $rawError = if (-not [string]::IsNullOrWhiteSpace([string]$stderr)) { [string]$stderr } else { [string]$stdout }
+    $retryable = $rawError -match '(?i)LegacyStorageGatewayNetworkError|Transport error|timed?\s*out|connection\s+(reset|closed)'
+    if ($retryable -and $attempt -lt $MaxAttempts) {
+      Start-Sleep -Seconds $RetryDelaySeconds
+      continue
+    }
+
+    $safeError = $rawError
+    $endpointHost = ''
+    $urlMatch = [regex]::Match($safeError, 'https?://([^/\s\)]+)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($urlMatch.Success) { $endpointHost = $urlMatch.Groups[1].Value }
     $safeError = $safeError -replace 'eyJ[A-Za-z0-9_.-]+', '[REDACTED_TOKEN]'
     $safeError = $safeError -replace 'https?://\S+', '[REDACTED_URL]'
     $safeError = $safeError -replace '(?i)(access[_ -]?token|authorization|password)\s*[:=]\s*\S+', '$1=[REDACTED]'
@@ -82,9 +100,9 @@ function Invoke-YdgCli {
     $safeLines = @($safeError -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 3)
     $safeSummary = if ($safeLines.Count) { ($safeLines | ForEach-Object { $_.Trim() }) -join ' | ' } else { 'No safe CLI error detail was returned.' }
     if ($safeSummary.Length -gt 500) { $safeSummary = $safeSummary.Substring(0, 500) }
-    throw "SUPABASE_CLI_FAILED:$($process.ExitCode):$safeSummary"
+    $hostSummary = if ($endpointHost) { ":HOST=$endpointHost" } else { '' }
+    throw "SUPABASE_CLI_FAILED:$($process.ExitCode):ATTEMPTS=$attempt$hostSummary`:$safeSummary"
   }
-  return $stdout
 }
 
 function Get-YdgFileHashRecord {
@@ -112,9 +130,24 @@ function ConvertFrom-YdgStorageList {
   if ($start -lt 0 -or $end -le $start) { throw "STORAGE_LIST_INVALID:$Bucket" }
   $rows = @($Output.Substring($start, $end - $start + 1) | ConvertFrom-Json)
   $result = foreach ($row in $rows) {
-    $path = [string](Value $row @('name','Name','key','Key') '')
+    $metadataAvailable = $row -isnot [string]
+    $path = if ($metadataAvailable) { [string](Value $row @('name','Name','key','Key') '') } else { [string]$row }
+    $path = $path.TrimStart('/')
     if ($path.StartsWith($Bucket + '/')) { $path = $path.Substring($Bucket.Length + 1) }
-    if (-not (Test-YdgRelativePath -Path $path)) { throw "STORAGE_PATH_INVALID:$Bucket" }
+    if ([string]::IsNullOrWhiteSpace($path)) {
+      $propertyNames = (@($row.PSObject.Properties.Name) | Sort-Object) -join ','
+      throw "STORAGE_LIST_ITEM_PATH_MISSING:$Bucket`:$propertyNames"
+    }
+    if (-not (Test-YdgRelativePath -Path $path)) {
+      $shape = @()
+      if ($path.StartsWith('ss:///')) { $shape += 'storage-uri' }
+      if ($path.StartsWith('/')) { $shape += 'leading-slash' }
+      if ($path.Contains('\')) { $shape += 'backslash' }
+      if ($path.EndsWith('/')) { $shape += 'trailing-slash' }
+      if ($path -match '(^|/)\.\.?(/|$)') { $shape += 'dot-segment' }
+      if (-not $shape.Count) { $shape += 'other' }
+      throw "STORAGE_PATH_INVALID:$Bucket`:SHAPE=$($shape -join ','):LENGTH=$($path.Length)"
+    }
     $metadata = Value $row @('metadata') $null
     $sizeValue = Value $row @('size') $null
     if ($null -eq $sizeValue -and $null -ne $metadata) { $sizeValue = Value $metadata @('size') -1 }
@@ -122,7 +155,7 @@ function ConvertFrom-YdgStorageList {
     [ordered]@{
       bucket = $Bucket; path = $path; id = [string](Value $row @('id') '')
       updatedAt = [string](Value $row @('updated_at','updatedAt') '')
-      bytes = [long]$sizeValue
+      bytes = [long]$sizeValue; metadataAvailable = $metadataAvailable
     }
   }
   return @($result | Sort-Object { $_['bucket'] }, { $_['path'] })

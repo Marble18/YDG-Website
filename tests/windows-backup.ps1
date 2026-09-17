@@ -19,6 +19,10 @@ $storageFixture = @(
 ) | ConvertTo-Json -Depth 5 -Compress
 $parsedStorage = @(ConvertFrom-YdgStorageList -Output ("CLI notice`n" + $storageFixture) -Bucket 'product-images')
 if ($parsedStorage.Count -ne 2 -or $parsedStorage[0].path -ne 'a.png' -or $parsedStorage[1].bytes -ne 20) { throw 'STORAGE_LIST_PARSE_FAILED' }
+$stringStorage = @(ConvertFrom-YdgStorageList -Output '["nested/b.webp","a.png"]' -Bucket 'product-images')
+if ($stringStorage.Count -ne 2 -or $stringStorage[0].path -ne 'a.png' -or $stringStorage[0].metadataAvailable -ne $false -or $stringStorage[0].bytes -ne -1) { throw 'STORAGE_STRING_LIST_PARSE_FAILED' }
+$leadingSlashStorage = @(ConvertFrom-YdgStorageList -Output '["/product-images/nested/b.webp","/a.png"]' -Bucket 'product-images')
+if ($leadingSlashStorage.Count -ne 2 -or $leadingSlashStorage[0].path -ne 'a.png' -or $leadingSlashStorage[1].path -ne 'nested/b.webp') { throw 'STORAGE_LEADING_SLASH_PARSE_FAILED' }
 
 $root = Join-Path ([IO.Path]::GetTempPath()) ('ydg-backup-test-' + [guid]::NewGuid().ToString('N'))
 $staging = Join-Path $root 'staging'; $destination = Join-Path $root 'destination'; $logs = Join-Path $root 'logs'
