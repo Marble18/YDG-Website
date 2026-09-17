@@ -1,7 +1,6 @@
 import JSZip from 'npm:jszip@3.10.1'
 import { corsHeaders, json } from '../_shared/http.ts'
 import { adminClient, publicClient, userClient } from '../_shared/supabase.ts'
-import { backupRead, READ_ACTIONS } from './backup-read.ts'
 
 const FORMAT_VERSION = 'ydg-business-backup-v1'
 const SCHEMA_VERSION = '202609070001'
@@ -36,9 +35,37 @@ async function requirePrimaryOwner(request: Request) {
   return { admin, userDb: userClient(token), ownerId: owner.id }
 }
 
+async function allRows(admin: ReturnType<typeof adminClient>, table: string) {
+  const rows: Record<string, unknown>[] = []
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await admin.from(table).select('*').range(offset, offset + 999)
+    if (error) throw new BackupError('DATABASE_TABLE_READ_FAILED', `Database backup could not read the ${table} table.`)
+    rows.push(...(data ?? []))
+    if (!data || data.length < 1000) return rows
+  }
+}
 
 type ManifestEntry = { bucket: string; path: string; size: number; mimeType: string; updatedAt: string | null; checksum?: string }
 
+async function bucketManifest(admin: ReturnType<typeof adminClient>, bucket: string) {
+  const entries: ManifestEntry[] = []
+  async function walk(prefix = '', depth = 0): Promise<void> {
+    if (depth > 8) throw new Error('Storage folder depth is not supported')
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await admin.storage.from(bucket).list(prefix, { limit: 1000, offset, sortBy: { column: 'name', order: 'asc' } })
+      if (error) throw new BackupError('STORAGE_LIST_FAILED', `Storage backup could not list the ${bucket} bucket.`)
+      for (const item of data ?? []) {
+        const path = prefix ? `${prefix}/${item.name}` : item.name
+        if (item.id) {
+          entries.push({ bucket, path, size: Number(item.metadata?.size ?? 0), mimeType: String(item.metadata?.mimetype ?? 'application/octet-stream'), updatedAt: item.updated_at ?? null })
+        } else await walk(path, depth + 1)
+      }
+      if (!data || data.length < 1000) break
+    }
+  }
+  await walk()
+  return entries
+}
 
 function hex(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(bytes)).map((value) => value.toString(16).padStart(2, '0')).join('')
@@ -52,6 +79,28 @@ async function bytesChecksum(value: ArrayBuffer) {
   return hex(await crypto.subtle.digest('SHA-256', value))
 }
 
+async function buildBackup(admin: ReturnType<typeof adminClient>, ownerId: string) {
+  const data: Record<string, unknown[]> = {}
+  const tableRows = await Promise.all(TABLES.map((table) => allRows(admin, table)))
+  TABLES.forEach((table, index) => { data[table] = tableRows[index] })
+  const storage = { manifests: (await Promise.all(BUCKETS.map((bucket) => bucketManifest(admin, bucket)))).flat() }
+  storage.manifests.sort((a, b) => `${a.bucket}/${a.path}`.localeCompare(`${b.bucket}/${b.path}`))
+  const core = {
+    metadata: {
+      application: 'Yadanar Theingi Ecommerce', formatVersion: FORMAT_VERSION,
+      projectRef: new URL(Deno.env.get('SUPABASE_URL')!).hostname.split('.')[0],
+      schemaVersion: SCHEMA_VERSION, createdAt: new Date().toISOString(), createdBy: ownerId,
+      tableCounts: Object.fromEntries(TABLES.map((table) => [table, data[table].length])),
+      storageCounts: Object.fromEntries(BUCKETS.map((bucket) => [bucket, storage.manifests.filter((entry) => entry.bucket === bucket).length])),
+      excludes: ['Auth passwords and hashes', 'secret keys', 'tokens', 'signed URLs', 'Storage object bytes'],
+    },
+    data,
+    storage,
+  }
+  const backup = { ...core, integrity: { algorithm: 'SHA-256', checksum: await checksum(core) } }
+  await validateBackup(backup)
+  return backup
+}
 
 async function validateBackup(value: unknown) {
   const backup = value as Record<string, any>
@@ -64,6 +113,29 @@ async function validateBackup(value: unknown) {
   return { backup, core, checksum: backup.integrity.checksum as string }
 }
 
+async function storageArchivePlan(admin: ReturnType<typeof adminClient>) {
+  const manifest = (await Promise.all(BUCKETS.map((bucket) => bucketManifest(admin, bucket)))).flat()
+  manifest.sort((a, b) => `${a.bucket}/${a.path}`.localeCompare(`${b.bucket}/${b.path}`))
+  const parts: ManifestEntry[][] = []
+  let current: ManifestEntry[] = []
+  let currentBytes = 0
+  let totalBytes = 0
+  for (const entry of manifest) {
+    const size = Number(entry.size || 0)
+    const maxSize = entry.bucket === 'product-images' ? 500 * 1024 : 5 * 1024 * 1024
+    if (!Number.isSafeInteger(size) || size < 0 || size > maxSize) throw new BackupError('STORAGE_OBJECT_SIZE_INVALID', 'A stored object has invalid size metadata and cannot be archived.')
+    if (current.length && currentBytes + size > ARCHIVE_PART_BYTES) {
+      parts.push(current); current = []; currentBytes = 0
+    }
+    current.push(entry); currentBytes += size; totalBytes += size
+  }
+  if (current.length) parts.push(current)
+  return {
+    manifest, parts, totalBytes,
+    totalFiles: manifest.length,
+    bucketCounts: Object.fromEntries(BUCKETS.map((bucket) => [bucket, manifest.filter((entry) => entry.bucket === bucket).length])),
+  }
+}
 
 type ValidatedArchive = {
   file: File
@@ -284,39 +356,51 @@ Deno.serve(async (request) => {
       return json({ ok: false, error: 'Database backup request is too large.' }, 413)
     }
 
-    if (READ_ACTIONS.includes(action)) {
-      const started=Date.now()
-      let timer: ReturnType<typeof setTimeout> | undefined
-      try {
-        const value=await Promise.race([
-          backupRead(adminClient((input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(12000) })),auth.ownerId,body,new URL(Deno.env.get('SUPABASE_URL')!).hostname.split('.')[0]),
-          new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new BackupError('BACKUP_READ_TIMEOUT','This backup read timed out. Retry this page; no data was changed.',504)),15000)})
-        ])
-        console.info(JSON.stringify({event:'backup-read',action,status:200,elapsedMs:Date.now()-started}))
-        if(value instanceof Blob) return new Response(value,{headers:{...corsHeaders,'Content-Type':'application/octet-stream','Cache-Control':'no-store'}})
-        return json({ok:true,result:value})
-      } catch(error) {
-        const code=error instanceof BackupError?error.code:String((error as any)?.code??'BACKUP_READ_FAILED')
-        console.error(JSON.stringify({event:'backup-read',action,code,elapsedMs:Date.now()-started}))
-        throw new BackupError(code,'Backup read did not complete. Retry this step; no data was changed.',Number((error as any)?.status)||503)
-      } finally {if(timer) clearTimeout(timer)}
+    if (action === 'create-database-backup') {
+      const backup = await buildBackup(auth.admin, auth.ownerId)
+      return new Response(JSON.stringify(backup, null, 2), { headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="ydg-business-backup-${new Date().toISOString().slice(0, 10)}.json"` } })
     }
-    if (['create-database-backup','inspect-storage-backup','create-storage-archive'].includes(action)) {
-      throw new BackupError('BACKUP_CLIENT_UPDATE_REQUIRED','Refresh to use the bounded backup workflow. No backup or restore metadata was written.',409)
+
+    if (action === 'inspect-storage-backup') {
+      const plan = await storageArchivePlan(auth.admin)
+      const preview = { operation: 'storage-backup', totalFiles: plan.totalFiles, totalBytes: plan.totalBytes, partCount: plan.parts.length, bucketCounts: plan.bucketCounts, partLimitBytes: ARCHIVE_PART_BYTES, parts: plan.parts }
+      const { data, error } = await auth.admin.from('business_restore_plans').insert({ owner_id: auth.ownerId, backup_checksum: await checksum(preview), backup_type: 'storage', preview }).select('id, expires_at').single()
+      if (error || !data) throw new BackupError('STORAGE_BACKUP_PLAN_FAILED', 'The Storage backup plan could not be created.')
+      return json({ ok: true, result: { planId: data.id, expiresAt: data.expires_at, totalFiles: plan.totalFiles, totalBytes: plan.totalBytes, partCount: plan.parts.length, bucketCounts: plan.bucketCounts, partLimitBytes: ARCHIVE_PART_BYTES } })
     }
-    if(action==='validate-database-only') {
-      const validated=await validateBackup(body.backup)
-      for(const table of TABLES) {
-        const rows=validated.backup.data[table]
-        if(rows.length!==validated.backup.metadata.tableCounts?.[table]||new Set(rows.map((r:any)=>r.id)).size!==rows.length) throw new BackupError('BACKUP_COUNTS_INVALID','Backup counts or row identities do not match.')
+
+    if (action === 'create-storage-archive') {
+      const zip = new JSZip()
+      const { data: storedPlan, error: planError } = await auth.admin.from('business_restore_plans').select('owner_id, preview, expires_at').eq('id', String(body.planId ?? '')).eq('owner_id', auth.ownerId).eq('backup_type', 'storage').maybeSingle()
+      if (planError || !storedPlan || storedPlan.preview?.operation !== 'storage-backup' || Date.parse(storedPlan.expires_at) < Date.now()) throw new BackupError('STORAGE_BACKUP_PLAN_EXPIRED', 'The Storage backup plan expired. Inspect Storage again and retry.')
+      const plan = storedPlan.preview as { parts: ManifestEntry[][]; partCount: number }
+      const partIndex = Number(body.partIndex)
+      if (!Number.isSafeInteger(partIndex) || partIndex < 0 || partIndex >= plan.partCount) throw new BackupError('STORAGE_ARCHIVE_PART_INVALID', 'The requested Storage archive part is invalid.')
+      const manifest = plan.parts[partIndex].map((entry) => ({ ...entry }))
+      let totalBytes = 0
+      for (const entry of manifest) {
+        const { data, error } = await auth.admin.storage.from(entry.bucket).download(entry.path)
+        if (error || !data) throw new Error('A Storage object could not be archived')
+        const objectBytes = await data.arrayBuffer()
+        entry.size = objectBytes.byteLength
+        if ((!entry.mimeType || entry.mimeType === 'application/octet-stream') && data.type) entry.mimeType = data.type.toLowerCase()
+        if (!safeStoragePath(entry.path) || !approvedMime(entry.bucket, entry.mimeType) || !matchesImageSignature(objectBytes, entry.mimeType, entry.path)) {
+          throw new Error('A stored object has an unsafe path or unsupported image type and cannot be archived')
+        }
+        const maxSize = entry.bucket === 'product-images' ? 500 * 1024 : 5 * 1024 * 1024
+        if (entry.size > maxSize) throw new Error('A stored object exceeds its approved bucket size limit')
+        totalBytes += entry.size
+        if (totalBytes > MAX_ARCHIVE_BYTES) throw new BackupError('STORAGE_ARCHIVE_PART_TOO_LARGE', 'A Storage archive part exceeded the 40 MB generation safety limit.')
+        entry.checksum = await bytesChecksum(objectBytes)
+        zip.file(`${entry.bucket}/${entry.path}`, new Uint8Array(objectBytes))
       }
-      return json({ok:true,result:{valid:true,checksum:validated.checksum,tableCounts:validated.backup.metadata.tableCounts,restoreExecuted:false}})
-    }
-    if(action==='validate-storage-only') {
-      const value=form?.get('archive')
-      if(!(value instanceof File)) throw new BackupError('STORAGE_ARCHIVE_INVALID','Choose an archive file.')
-      const archive=await validateStorageArchive(value)
-      return json({ok:true,result:{valid:true,checksum:archive.checksum,fileCount:archive.objects.length,restoreExecuted:false}})
+      const manifestCore = { application: 'Yadanar Theingi Ecommerce', formatVersion: 'ydg-storage-archive-v1', schemaVersion: SCHEMA_VERSION, createdAt: new Date().toISOString(), createdBy: auth.ownerId, partNumber: partIndex + 1, partCount: plan.partCount, objects: manifest }
+      zip.file('manifest.json', JSON.stringify({ ...manifestCore, integrity: { algorithm: 'SHA-256', checksum: await checksum(manifestCore) } }, null, 2))
+      const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' })
+      // functions-js only preserves binary response bodies as a Blob for
+      // application/octet-stream. application/zip falls through to text(),
+      // which corrupts the ZIP central directory before the browser saves it.
+      return new Response(bytes, { headers: { ...corsHeaders, 'Content-Type': 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'X-YDG-Archive-Type': 'application/zip', 'X-YDG-Part-Number': String(partIndex + 1), 'X-YDG-Part-Count': String(plan.partCount), 'Content-Disposition': `attachment; filename="ydg-storage-archive-${new Date().toISOString().slice(0, 10)}-part-${partIndex + 1}-of-${plan.partCount}.zip"` } })
     }
 
     if (action === 'preview-storage-restore' || action === 'confirm-storage-restore') {

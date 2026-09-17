@@ -23,7 +23,6 @@
   var currentUser = null;
   var adminPage = 'dashboard';
   var toastTimer = null;
-  var backupDestination = null;
   var customerCategory = 'All';
   var PAGE_SIZE = 20;
   var customerCatalogue = { items: [], total: 0, search: '', categoryId: '', loading: false, error: '', requestId: 0 };
@@ -2249,11 +2248,11 @@
     button.disabled = true; button.textContent = 'Creating secure backup...';
     setBusinessBackupStatus('Reading live business records and calculating checksum...');
     try {
-      var backup = await businessBackupService.createDatabaseBackup(function (message) { setBusinessBackupStatus(message); });
+      var backup = await businessBackupService.createDatabaseBackup();
       var filename = 'ydg-business-backup-' + new Date().toISOString().slice(0, 10) + '.json';
       downloadBlob(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }), filename);
-      setBusinessBackupStatus('Database checksum/counts verified; download requested. Check that the JSON file was saved. Storage bytes require a separate archive set.');
-      toast('Validated database file ready. Verify your browser download.');
+      setBusinessBackupStatus('Database backup downloaded. Store it privately with its matching Storage archive.');
+      toast('Secure database backup downloaded.');
     } catch (error) {
       setBusinessBackupStatus(error.message || 'Database backup failed. Retry safely.', true);
       toast(error.message || 'Database backup failed.');
@@ -2264,37 +2263,32 @@
 
   async function createStorageArchive(event) {
     var button = event.currentTarget;
-    if (!window.showDirectoryPicker) return setBusinessBackupStatus('Verified multi-part backup requires desktop Chrome/Edge folder saving. No data changed.', true);
-    button.disabled = true; button.textContent = 'Choose a private backup folder...';
+    button.disabled = true; button.textContent = 'Inspecting Storage...';
+    setBusinessBackupStatus('Reading the approved bucket manifest before downloading files...');
     try {
-      if (!businessBackupService.hasBackupResume() || !backupDestination) backupDestination = { directory: await window.showDirectoryPicker({ mode: 'readwrite' }), pending: new Set() };
-      var directory = backupDestination.directory;
-      async function saveVerified(blob, filename) {
-        var expected = await window.YDGBackupWorkflow.hash(await blob.arrayBuffer());
-        try {
-          var existing = await directory.getFileHandle(filename);
-          if (await window.YDGBackupWorkflow.hash(await (await existing.getFile()).arrayBuffer()) === expected) return;
-          if (!backupDestination.pending.has(filename)) throw new Error('A different local file already has this name. Nothing was overwritten.');
-        } catch (error) { if (error.name !== 'NotFoundError') throw error; }
-        var handle = await directory.getFileHandle(filename, { create: true });
-        backupDestination.pending.add(filename);
-        var writer = await handle.createWritable();
-        try { await writer.write(blob); await writer.close(); }
-        catch (error) { try { await writer.abort(); } catch (_) {} throw error; }
-        if (await window.YDGBackupWorkflow.hash(await (await handle.getFile()).arrayBuffer()) !== expected) throw new Error('Saved file checksum mismatch. The set is incomplete.');
-        backupDestination.pending.delete(filename);
+      var plan = await businessBackupService.inspectStorageBackup();
+      if (!plan.totalFiles) {
+        setBusinessBackupStatus('No files to back up in product-images or delivery-proofs. Database backup is still available.');
+        toast('No private Storage files to back up.');
+        return;
       }
-      var index = await businessBackupService.createStorageBackup(function (message) {
-        button.textContent = 'Backing up Storage...'; setBusinessBackupStatus(message);
-      }, saveVerified);
-      await saveVerified(new Blob([JSON.stringify(index, null, 2)], { type: 'application/json' }), 'ydg-storage-complete-' + index.createdAt.replace(/[:.]/g, '-') + '.json');
-      setBusinessBackupStatus('Saved and verified ' + index.partCount + ' archive parts / ' + index.totalFiles + ' files, plus completion index. Keep every part private. Database backup is separate.');
-      toast('Storage archive files verified in your selected folder.');
+      setBusinessBackupStatus('Found ' + plan.totalFiles + ' files (' + readableBytes(plan.totalBytes) + '). Downloading ' + plan.partCount + ' safe archive part' + (plan.partCount === 1 ? '' : 's') + '...');
+      for (var partIndex = 0; partIndex < plan.partCount; partIndex++) {
+        button.textContent = 'Downloading part ' + (partIndex + 1) + ' of ' + plan.partCount + '...';
+        var archive = await businessBackupService.createStorageArchive(plan.planId, partIndex);
+        if (!(archive instanceof Blob) || !archive.size) {
+          throw new Error('Storage archive binary response was not received safely. No archive was downloaded; retry after refreshing the page.');
+        }
+        var blob = archive.slice(0, archive.size, 'application/zip');
+        downloadBlob(blob, 'ydg-private-storage-' + new Date().toISOString().slice(0, 10) + '-part-' + (partIndex + 1) + '-of-' + plan.partCount + '.zip');
+      }
+      setBusinessBackupStatus('Downloaded ' + plan.partCount + ' private Storage archive part' + (plan.partCount === 1 ? '' : 's') + ' for ' + plan.totalFiles + ' files. Keep every part private and validate/restore each separately.');
+      toast('Private Storage archive download completed.');
     } catch (error) {
-      setBusinessBackupStatus('Backup INCOMPLETE. ' + (error.name === 'AbortError' ? 'Folder selection cancelled.' : error.message || 'Retry safely.') + ' Keep this tab open to resume; choose the same folder.', true);
+      setBusinessBackupStatus(error.message || 'Storage archive failed. No data was changed.', true);
+      toast(error.message || 'Storage archive failed.');
     } finally {
-      button.disabled = false;
-      button.textContent = businessBackupService.hasBackupResume() ? 'Resume private Storage archive' : 'Create private Storage archive';
+      button.disabled = false; button.textContent = 'Create private Storage archive';
     }
   }
 
@@ -2503,7 +2497,6 @@
   }
 
   async function logout() {
-    businessBackupService.resetBackup(); backupDestination = null;
     await supabaseClient.auth.signOut();
     currentUser = null;
     adminPage = 'dashboard';
@@ -2551,7 +2544,6 @@
   }
 
   supabaseClient.auth.onAuthStateChange(function (event) {
-    if (event === 'SIGNED_OUT') { businessBackupService.resetBackup(); backupDestination = null; }
     if (event === 'PASSWORD_RECOVERY') renderPasswordRecovery();
   });
 

@@ -23,11 +23,7 @@
       var result = await client.functions.invoke('business-backup', {
         body: Object.assign({ action: action }, extra || {})
       });
-      if (result.error) {
-        var failure = new Error(await readableError(result.error));
-        failure.status = result.error.context && result.error.context.status;
-        throw failure;
-      }
+      if (result.error) throw new Error(await readableError(result.error));
       if (result.data && result.data.ok === false) throw new Error((result.data.code ? result.data.code + ': ' : '') + (result.data.error || 'Backup operation failed.'));
       return result.data;
     }
@@ -42,20 +38,12 @@
       if (result.data && result.data.ok === false) throw new Error((result.data.code ? result.data.code + ': ' : '') + (result.data.error || 'Storage restore operation failed.'));
       return result.data.result;
     }
-    var workflow = window.YDGBackupWorkflow.create(async function (action, args) {
-      var timer;
-      try {
-        var response = await Promise.race([invoke(action, args), new Promise(function (_, reject) {
-          timer = setTimeout(function () { reject(new Error('Backup read timed out. No complete backup yet; retry safely.')); }, 25000);
-        })]);
-        return response instanceof Blob ? response : response.result;
-      } finally { clearTimeout(timer); }
-    });
     return {
-      createDatabaseBackup: workflow.database,
-      createStorageBackup: workflow.storage,
-      resetBackup: workflow.reset,
-      hasBackupResume: workflow.hasResume,
+      createDatabaseBackup: function () { return invoke('create-database-backup'); },
+      inspectStorageBackup: function () {
+        return invoke('inspect-storage-backup').then(function (response) { return response.result; });
+      },
+      createStorageArchive: function (planId, partIndex) { return invoke('create-storage-archive', { planId: planId, partIndex: partIndex }); },
       previewRestore: function (backup) {
         return invoke('preview-restore', { backup: backup }).then(function (response) { return response.result; });
       },
