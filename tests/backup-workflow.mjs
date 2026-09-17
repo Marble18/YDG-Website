@@ -61,11 +61,11 @@ async function databasePaginationAndRetry() {
   const workflow = globalThis.YDGBackupWorkflow.create(fixture.read, { sleep: async () => {} })
   const backup = await workflow.database(() => {})
   assert.equal(backup.data.products.length, 1205)
-  assert.equal(backup.storage.manifests.length, 0)
+  assert.equal(backup.storage.manifests.length, 205)
   assert.equal((await globalThis.YDGBackupWorkflow.validateDatabase(backup)).valid, true)
   const productPages = fixture.calls.filter((call) => call.action === 'backup-table-page' && call.table === 'products')
   assert.ok(productPages.length >= 14, 'two full product passes use bounded 200-row pages')
-  assert.equal(fixture.calls.filter((call) => call.action === 'backup-storage-page').length, 0, 'database backup never waits for Storage listing')
+  assert.ok(fixture.calls.filter((call) => call.action === 'backup-storage-page' && call.bucket === 'product-images').length >= 6)
   assert.ok(fixture.calls.every((call) => !['create-database-backup','create-storage-archive'].includes(call.action)))
 }
 

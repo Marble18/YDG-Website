@@ -76,9 +76,10 @@
     }
     function counts(list){return Object.fromEntries(BUCKETS.map(function(b){return [b,list.filter(function(e){return e.bucket===b;}).length];}));}
     async function database(progress){progress=progress||function(){};var metadata=await info(progress);var data=await tables(progress);
-      progress('Verifying a second database read. No download marked complete yet.');
-      if(await hash(data)!==await hash(await tables(progress)))fail('Source data changed between verification passes. Retry during a quiet period.');
-      var core={metadata:{application:'Yadanar Theingi Ecommerce',formatVersion:FORMAT,projectRef:metadata.projectRef,schemaVersion:SCHEMA,createdAt:new Date().toISOString(),createdBy:metadata.ownerId,tableCounts:Object.fromEntries(TABLES.map(function(t){return [t,data[t].length];})),storageCounts:counts([]),excludes:['Auth passwords and hashes','secret keys','tokens','signed URLs','Storage object metadata and bytes','DDL and project configuration'],consistency:'Two matching database read passes, not an MVCC snapshot. Storage has its own separately verified archive set.'},data:data,storage:{manifests:[]}};
+      var listed=await manifest(progress);
+      progress('Verifying a second complete read. No download marked complete yet.');
+      if(await hash(data)!==await hash(await tables(progress))||await hash(listed)!==await hash(await manifest(progress)))fail('Source data changed between verification passes. Retry during a quiet period.');
+      var core={metadata:{application:'Yadanar Theingi Ecommerce',formatVersion:FORMAT,projectRef:metadata.projectRef,schemaVersion:SCHEMA,createdAt:new Date().toISOString(),createdBy:metadata.ownerId,tableCounts:Object.fromEntries(TABLES.map(function(t){return [t,data[t].length];})),storageCounts:counts(listed),excludes:['Auth passwords and hashes','secret keys','tokens','signed URLs','Storage object bytes','DDL and project configuration'],consistency:'Two matching read passes, not an MVCC snapshot. Use a quiet period; concurrent changes may require retry.'},data:data,storage:{manifests:listed}};
       var backup=Object.assign({},core,{integrity:{algorithm:'SHA-256',checksum:await hash(core)}});
       if(new TextEncoder().encode(JSON.stringify(backup,null,2)).length>MAX_DB)fail('Backup exceeds restore size limit.');
       await validateDatabase(backup);return backup;
