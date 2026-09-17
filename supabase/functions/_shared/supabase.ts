@@ -11,11 +11,11 @@ function firstConfiguredKey(jsonName: string, legacyName: string) {
   return legacy
 }
 
-export function adminClient() {
+export function adminClient(fetchOverride?: typeof fetch) {
   return createClient(
     Deno.env.get('SUPABASE_URL')!,
     firstConfiguredKey('SUPABASE_SECRET_KEYS', 'SUPABASE_SERVICE_ROLE_KEY'),
-    { auth: { autoRefreshToken: false, persistSession: false } },
+    { auth: { autoRefreshToken: false, persistSession: false }, ...(fetchOverride ? { global: { fetch: fetchOverride } } : {}) },
   )
 }
 

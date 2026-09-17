@@ -70,15 +70,23 @@ export default async function supabaseProxy(request) {
     redirect: 'manual'
   };
   if (request.method !== 'GET' && request.method !== 'HEAD') options.body = request.body;
+  var backupRequest = servicePath === '/functions/v1/business-backup';
+  var requestId = crypto.randomUUID();
+  var started = Date.now();
+  if (backupRequest) console.info(JSON.stringify({ event: 'backup-proxy-start', requestId: requestId }));
 
   try {
     var upstreamResponse = await fetch(upstream, options);
+    if (backupRequest) console.info(JSON.stringify({ event: 'backup-proxy-response', requestId: requestId, status: upstreamResponse.status, elapsedMs: Date.now() - started }));
+    var headers = responseHeaders(upstreamResponse, request.url, servicePath);
+    if (backupRequest) headers.set('x-ydg-request-id', requestId);
     return new Response(upstreamResponse.body, {
       status: upstreamResponse.status,
       statusText: upstreamResponse.statusText,
-      headers: responseHeaders(upstreamResponse, request.url, servicePath)
+      headers: headers
     });
   } catch (error) {
+    if (backupRequest) console.error(JSON.stringify({ event: 'backup-proxy-failed', requestId: requestId, code: 'UPSTREAM_FETCH_FAILED', elapsedMs: Date.now() - started }));
     return jsonError('The secure data service is temporarily unavailable. No data was changed.', 502);
   }
 }
