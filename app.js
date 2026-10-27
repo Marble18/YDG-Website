@@ -612,7 +612,7 @@
   function renderCategoryFilters() {
     var categories = state.categories.filter(function (category) { return category.is_active; });
     if (customerCategory !== 'All' && !categories.some(function (category) { return String(category.id) === String(customerCategory); })) customerCategory = 'All';
-    document.getElementById('category-filters').innerHTML = '<button class="category-filter ' + (customerCategory === 'All' ? 'active' : '') + '" data-customer-category="">All</button>' + categories.map(function (category) {
+    document.getElementById('category-filters').innerHTML = '<button class="category-filter ' + (customerCategory === 'All' ? 'active' : '') + '" data-customer-category="">Recently Added</button>' + categories.map(function (category) {
       return '<button class="category-filter ' + (String(customerCategory) === String(category.id) ? 'active' : '') + '" data-customer-category="' + category.id + '">' + esc(category.name) + '</button>';
     }).join('');
     document.querySelectorAll('[data-customer-category]').forEach(function (button) {
@@ -644,6 +644,7 @@
         visibility: 'active',
         categoryId: customerCatalogue.categoryId,
         search: customerCatalogue.search,
+        order: 'newest',
         offset: reset ? 0 : customerCatalogue.items.length,
         limit: PAGE_SIZE
       });
@@ -703,7 +704,7 @@
         return '<button type="button" class="unit-choice ' + (unit === defaultUnit ? 'active' : '') + '" data-product-unit="' + product.id + '" data-unit="' + unit + '" aria-pressed="' + (unit === defaultUnit) + '">' + unitLabel(unit, 1) + '</button>';
       }).join('');
       return '<article class="product-card" id="product-card-' + product.id + '" data-selected-unit="' + defaultUnit + '">' + photo + '<div class="product-info"><div class="product-category">' + esc(product.category) + '</div><div class="product-name">' + esc(product.name) + '</div><div class="customer-unit-picker" role="group" aria-label="Choose sales unit for ' + esc(product.name) + '">' + choices + '</div><div class="product-meta"><span class="price" data-card-price>' + money(productPrice(product, defaultUnit)) + '</span><span class="unit-chip" data-card-unit>/ ' + defaultUnit + '</span></div><span class="minimum-order" data-card-minimum>Minimum ' + minimum + ' ' + unitLabel(defaultUnit, minimum) + '</span><span class="box-equivalent" data-card-equivalent ' + (defaultUnit === 'box' ? '' : 'hidden') + '>' + (defaultUnit === 'box' ? '1 box = ' + product.piecesPerBox + ' pcs' : '') + '</span><div class="card-order-total" data-card-total title="Per-piece rate within one box, calculated from the box price; not the separately sold pcs price." aria-live="polite" aria-atomic="true" ' + (showBoxBreakdown ? '' : 'hidden') + '>' + (showBoxBreakdown ? customerBoxPriceBreakdown(product) : '') + '</div><div class="card-footer"><div class="quantity-stepper" aria-label="Quantity for ' + esc(product.name) + '"><button type="button" data-quantity-change="-1" data-quantity-target="qty-' + product.id + '" aria-label="Decrease quantity">−</button><input class="qty-input" aria-label="Quantity" id="qty-' + product.id + '" type="number" min="' + minimum + '" step="1" value="' + minimum + '" data-product-quantity="' + product.id + '"><button type="button" data-quantity-change="1" data-quantity-target="qty-' + product.id + '" aria-label="Increase quantity">+</button></div><button class="primary add-to-cart" data-product="' + product.id + '">Add to cart</button></div></div></article>';
-    }).join('') : '<div class="empty">No matching products found.</div>';
+    }).join('') : (customerCatalogue.search || customerCatalogue.categoryId ? '<div class="empty">No matching products found.</div>' : '');
     function refreshCard(productId, selectedUnit, resetQuantity) {
       var product = getProduct(productId); var card = document.getElementById('product-card-' + productId); var input = document.getElementById('qty-' + productId);
       if (!product || !card || !input) return;

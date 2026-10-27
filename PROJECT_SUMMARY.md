@@ -2,7 +2,7 @@
 
 ဒီဖိုင်ကို Frontend, Backend/Data နှင့် Bug/Maintenance အလုပ်အားလုံးအတွက် shared source of truth အဖြစ် သုံးပါမည်။ ကြီးမားသော feature သို့မဟုတ် architecture ပြောင်းလဲမှု merge ပြီးတိုင်း update လုပ်ရပါမည်။
 
-Last updated: 2026-09-16
+Last updated: 2026-10-27
 
 ## 1. Project goal
 
@@ -40,6 +40,7 @@ Yadanar Theingi Stationery & Fancy အတွက် မြန်မာအသု�
 - Owner Products provides template-based `.xlsx` export with category and active/inactive filters, sequential numbering, embedded product photos and a Unit column added after the original template columns.
 - Excel export is generated in the browser from the versioned template asset; the source template is never overwritten and no secret key is involved.
 - Customer Catalogue and Owner Products use database-side category filters, debounced name search, an exact result count and stable `created_at, id` pagination with 20 products per request.
+- The Customer Catalogue default tab is labelled `Recently Added` and queries active, non-deleted products newest-first with stable `created_at DESC, id DESC` ordering. Category/search changes reset the same 20-item database pagination; Owner/Staff catalogue and export ordering remain unchanged.
 - Product images use native lazy loading. Catalogue screens include loading skeletons, empty results, retryable errors and Load More states for desktop and mobile.
 - Excel export deliberately uses a separate paged full-result fetch because exporting all matching rows is an explicit owner action; normal catalogue pages never fetch all products.
 - PR #12 adds a manager Categories page for active owners and staff. It lists active/inactive status and a database-counted total covering both active and inactive products.
