@@ -16,8 +16,9 @@
     return query;
   }
 
-  function ordered(query) {
-    return query.order('created_at', { ascending: true }).order('id', { ascending: true });
+  function ordered(query, options) {
+    var ascending = options.order !== 'newest';
+    return query.order('created_at', { ascending: ascending }).order('id', { ascending: ascending });
   }
 
   function createProductCatalogueService(client) {
@@ -26,7 +27,7 @@
         var limit = Math.max(1, Math.min(Number(options.limit) || 20, 100));
         var offset = Math.max(0, Number(options.offset) || 0);
         var query = client.from('products').select(PRODUCT_COLUMNS, { count: 'exact' });
-        query = ordered(applyFilters(query, options)).range(offset, offset + limit - 1);
+        query = ordered(applyFilters(query, options), options).range(offset, offset + limit - 1);
         var result = await query;
         if (result.error) throw result.error;
         return { rows: result.data || [], count: Number(result.count) || 0 };
@@ -38,7 +39,7 @@
         var batchSize = 200;
         while (true) {
           var query = client.from('products').select(PRODUCT_COLUMNS);
-          query = ordered(applyFilters(query, options)).range(offset, offset + batchSize - 1);
+          query = ordered(applyFilters(query, options), options).range(offset, offset + batchSize - 1);
           var result = await query;
           if (result.error) throw result.error;
           rows = rows.concat(result.data || []);
